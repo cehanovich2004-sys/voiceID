@@ -25,6 +25,8 @@ VoiceID Phase 1 uses:
 The `src`-layout keeps imports honest and makes packaging behavior closer to
 real installation. Python 3.11 is a conservative runtime target for the future
 ML stack while Phase 1 has no reason to require newer Python features.
+The `>=3.11,<3.12` range is temporary and will be revisited before adding
+audio and ML dependencies.
 
 `pyproject.toml` gives one standard place for package metadata and tool
 configuration. A modular monolith keeps the project simple while preserving

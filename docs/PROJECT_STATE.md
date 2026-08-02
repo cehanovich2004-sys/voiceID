@@ -19,6 +19,9 @@ Phase 1: project foundation.
 
 - Python 3.11 is the safest Phase 1 runtime target for future ML dependency
   compatibility.
+- The `>=3.11,<3.12` runtime range is a temporary Phase 1 constraint, not a
+  long-term product requirement. Compatibility will be reviewed before adding
+  audio and ML dependencies.
 - The MVP should remain a modular monolith until real scaling pressure exists.
 - The original project specification is retained as product context, while
   Phase 1 uses `src`-layout instead of the earlier draft `app/` layout.

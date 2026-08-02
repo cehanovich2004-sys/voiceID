@@ -2,6 +2,15 @@
 
 Version: 0.1 MVP
 
+> WARNING: This file is the original product draft and is kept as historical
+> context. Current technical decisions are defined by ADR files, README, and
+> the current roadmap. ADR-001 supersedes the draft `app/` project layout with
+> the current `src`-layout and sets the Phase 1 runtime to Python 3.11.
+>
+> Similarity score is not probability. Cosine similarity, confidence scores, or
+> any future score must not be presented as a match probability unless it has
+> been calibrated on a labeled same-speaker and different-speaker dataset.
+
 ---
 
 # 1. Описание проекта
@@ -101,7 +110,7 @@ VoiceID — это система голосовой идентификации 
 
 4. Сравнивать два embedding.
 
-5. Рассчитывать вероятность совпадения.
+5. Рассчитывать similarity/confidence score.
 
 6. Выводить результат пользователю.
 
@@ -112,7 +121,7 @@ VoiceID — это система голосовой идентификации 
 
 Voice Similarity
 
-Match probability:
+Match confidence score:
 
 96.7%
 
@@ -143,7 +152,9 @@ MATCH
 
 Основной язык:
 
-Python 3.12+
+Legacy draft: Python 3.12+
+
+Superseded for Phase 1 by ADR-001: Python 3.11.
 
 ---
 
@@ -182,6 +193,8 @@ Testing:
 ---
 
 # 8. Архитектура проекта
+
+Legacy draft, superseded by ADR-001 and README for Phase 1.
 
 voiceid/
 
