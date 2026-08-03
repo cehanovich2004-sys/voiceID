@@ -72,6 +72,9 @@ The two results must match on:
 - model identifier;
 - pinned model revision;
 - backend name;
+- backend version;
+- preprocessing contract version;
+- embedding contract version;
 - raw/normalized policy.
 
 Model identifier, model revision, and backend name are used only for internal
@@ -118,13 +121,18 @@ Inputs are not modified and remain read-only.
 
 ## Preprocessing Compatibility
 
-Current Phase 4B embeddings are considered compatible only within the existing
-Phase 3 preprocessing v1 pipeline. Phase 5A relies on that unchanged pipeline
-and exact agreement of currently available embedding metadata.
+Current Phase 4B embeddings carry `preprocessing_contract_version=phase3-v1`,
+`embedding_contract_version=phase4b-v1`, and a backend adapter version. Phase
+5A requires these values to be well formed, current, and equal for both
+inputs. A future processing or embedding contract change requires a separate
+version and architecture decision before results can be mixed.
 
-`EmbeddingMetadata` does not gain a preprocessing version in this phase. Any
-future preprocessing change requires a separate ADR and an explicit version
-field before results from different pipelines can be mixed.
+The similarity result records `comparison_version=1`, which identifies the raw
+cosine comparison semantics. Comparison version belongs to the operation
+result and is not an input-embedding compatibility field.
+
+These versions are reproducibility metadata. Equality does not prove
+biometric accuracy, calibration quality, or identity.
 
 ## Interpretation And Non-Goals
 

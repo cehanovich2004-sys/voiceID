@@ -113,15 +113,28 @@ The application service:
 
 Metadata contains only non-secret fields:
 
+- `preprocessing_contract_version`: `phase3-v1`;
+- `embedding_contract_version`: `phase4b-v1`;
 - `embedding_dimension`;
 - `model_identifier`;
 - `model_revision`;
 - `backend_name`;
+- `backend_version`;
 - `device`;
 - `input_sample_rate_hz`;
 - `input_samples`;
 - `input_duration_seconds`;
 - `normalized`.
+
+The SpeechBrain ECAPA implementation reports backend adapter contract version
+`speechbrain-ecapa-adapter-v1`. This deterministic value describes the local
+adapter behavior without importing SpeechBrain on the core package path. The
+model identifier and pinned model revision remain separate provenance fields.
+
+All three provenance versions are populated by the application/backend
+boundaries rather than accepted from audio or caller input. They support
+reproducibility and compatibility checks, but equal versions do not establish
+biometric accuracy.
 
 `to_dict()`, `repr()`, `str()`, user-facing errors, and normal logs must not
 include waveform values, embedding values, absolute paths, cache paths, access

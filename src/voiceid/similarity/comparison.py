@@ -8,12 +8,15 @@ from typing import Final
 
 import numpy as np
 
+from voiceid.audio.preprocessing import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
     EMBEDDING_DIMENSION,
     EmbeddingMetadata,
     EmbeddingStatus,
     EmbeddingVector,
     SpeakerEmbeddingResult,
+    is_valid_version_identifier,
 )
 from voiceid.similarity.contracts import (
     COSINE_SIMILARITY_METRIC,
@@ -127,6 +130,13 @@ def _validate_embedding(result: SpeakerEmbeddingResult) -> _ValidatedEmbedding:
 
 
 def _validate_input_metadata(metadata: EmbeddingMetadata) -> None:
+    version_fields = (
+        metadata.preprocessing_contract_version,
+        metadata.embedding_contract_version,
+        metadata.backend_version,
+    )
+    if not all(is_valid_version_identifier(value) for value in version_fields):
+        raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
     if type(metadata.input_samples) is not int or metadata.input_samples <= 0:
         raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
     if (
@@ -178,6 +188,10 @@ def _validate_compatibility(
         and bool(reference.backend_name)
         and type(candidate.backend_name) is str
         and bool(candidate.backend_name)
+        and reference.preprocessing_contract_version == PREPROCESSING_CONTRACT_VERSION
+        and candidate.preprocessing_contract_version == PREPROCESSING_CONTRACT_VERSION
+        and reference.embedding_contract_version == EMBEDDING_CONTRACT_VERSION
+        and candidate.embedding_contract_version == EMBEDDING_CONTRACT_VERSION
         and type(reference.normalized) is bool
         and type(candidate.normalized) is bool
     )
@@ -186,6 +200,10 @@ def _validate_compatibility(
         and reference.model_identifier == candidate.model_identifier
         and reference.model_revision == candidate.model_revision
         and reference.backend_name == candidate.backend_name
+        and reference.backend_version == candidate.backend_version
+        and reference.preprocessing_contract_version
+        == candidate.preprocessing_contract_version
+        and reference.embedding_contract_version == candidate.embedding_contract_version
         and reference.normalized == candidate.normalized
     )
     if not metadata_fields_are_valid or not metadata_matches:

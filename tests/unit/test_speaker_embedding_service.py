@@ -9,13 +9,18 @@ import numpy as np
 import pytest
 
 from voiceid.audio.preprocessing import (
+    PREPROCESSING_CONTRACT_VERSION,
     PreprocessedAudioMetadata,
     PreprocessedAudioResult,
     PreprocessingIssue,
     PreprocessingStatus,
 )
 from voiceid.embeddings.backends.base import EmbeddingBackend
-from voiceid.embeddings.contracts import EmbeddingErrorCode, EmbeddingVector
+from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
+    EmbeddingErrorCode,
+    EmbeddingVector,
+)
 from voiceid.embeddings.loader import (
     EmbeddingBackendFactory,
     EmbeddingModelError,
@@ -31,6 +36,7 @@ class FakeBackend(EmbeddingBackend):
         *,
         embedding: EmbeddingVector | None = None,
         exception: BaseException | None = None,
+        backend_version: object = "fake-backend-v1",
     ) -> None:
         self.calls = 0
         self.received_pathname = False
@@ -39,10 +45,15 @@ class FakeBackend(EmbeddingBackend):
             embedding if embedding is not None else np.full(192, 0.25, dtype=np.float32)
         )
         self._exception = exception
+        self._backend_version = backend_version
 
     @property
     def backend_name(self) -> str:
         return "fake"
+
+    @property
+    def backend_version(self) -> str:
+        return self._backend_version  # type: ignore[return-value]
 
     @property
     def model_identifier(self) -> str:
@@ -99,7 +110,36 @@ def test_valid_phase3_result_produces_valid_embedding() -> None:
     assert result.metadata is not None
     assert result.metadata.embedding_dimension == 192
     assert result.metadata.normalized is False
+    assert (
+        result.metadata.preprocessing_contract_version == PREPROCESSING_CONTRACT_VERSION
+    )
+    assert result.metadata.embedding_contract_version == EMBEDDING_CONTRACT_VERSION
+    assert result.metadata.backend_version == backend.backend_version
     assert backend.calls == 1
+
+
+def test_fake_backend_version_is_deterministic_without_model_loading() -> None:
+    backend = FakeBackend()
+
+    assert backend.backend_version == "fake-backend-v1"
+    assert backend.backend_version == "fake-backend-v1"
+    assert backend.calls == 0
+
+
+def test_malformed_backend_version_is_sanitized_without_partial_result() -> None:
+    class CanaryVersion:
+        def __str__(self) -> str:
+            return "/Users/private/TOKEN_BACKEND_VERSION"
+
+    backend = FakeBackend(backend_version=CanaryVersion())
+
+    result = _service(backend).embed(_valid_audio_result())
+
+    assert _code(result) == EmbeddingErrorCode.INFERENCE_FAILED
+    assert result.embedding is None
+    assert result.metadata is None
+    assert "TOKEN_BACKEND_VERSION" not in repr(result)
+    assert "/Users/private" not in str(result.to_dict())
 
 
 def test_invalid_phase3_result_does_not_call_backend() -> None:

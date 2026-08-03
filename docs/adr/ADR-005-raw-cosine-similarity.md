@@ -13,7 +13,8 @@ pure deterministic cosine similarity function.
 - L2 norm less than or equal to `1e-8` is rejected as numerically degenerate.
 - The final score is clipped to `[-1.0, 1.0]` only for floating-point overshoot.
 - Compatibility requires the same dimension, model identifier, pinned model
-  revision, backend, normalized policy, and 16000 Hz input contract.
+  revision, backend identity/version, preprocessing contract version,
+  embedding contract version, normalized policy, and 16000 Hz input contract.
 - Model identifier, revision, and backend remain internal compatibility inputs
   and are omitted from public similarity metadata.
 - The result exposes a raw score and safe metadata, never a biometric verdict.
@@ -63,9 +64,11 @@ the Phase 4B embedding backend or Phase 5A contract.
 ## Preprocessing Contract
 
 Phase 5A assumes all current Phase 4B embeddings were produced from the
-unchanged Phase 3 preprocessing v1 pipeline. No preprocessing version field is
-added retroactively. Before a future preprocessing change can coexist with the
-current pipeline, a separate ADR and explicit version metadata are required.
+unchanged Phase 3 preprocessing v1 pipeline. The Phase 5B prerequisite records
+that provenance explicitly as `preprocessing_contract_version=phase3-v1`,
+alongside embedding and backend contract versions. Before a future processing
+contract can coexist with the current pipeline, a separate ADR and new version
+value are required.
 
 ## Risks
 

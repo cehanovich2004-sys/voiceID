@@ -16,6 +16,7 @@ from voiceid.embeddings.loader import (
     EmbeddingModelError,
 )
 from voiceid.embeddings.policy import (
+    SPEECHBRAIN_ECAPA_BACKEND_VERSION,
     SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION,
     SPEECHBRAIN_ECAPA_MODEL_ID,
     SPEECHBRAIN_ECAPA_MODEL_REVISION,
@@ -53,6 +54,12 @@ class SpeechBrainEcapaBackend(EmbeddingBackend):
         """Return a stable backend name."""
 
         return "speechbrain-ecapa-tdnn"
+
+    @property
+    def backend_version(self) -> str:
+        """Return the stable SpeechBrain adapter contract version."""
+
+        return SPEECHBRAIN_ECAPA_BACKEND_VERSION
 
     @property
     def model_identifier(self) -> str:

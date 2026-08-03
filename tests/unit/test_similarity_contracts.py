@@ -84,6 +84,13 @@ def test_similarity_result_rejects_contradictory_states(
     [
         ({"metric": "dot_product"}, "cosine_similarity"),
         ({"comparison_version": "2"}, "version"),
+        ({"comparison_version": None}, "version"),
+        ({"comparison_version": ""}, "version"),
+        ({"comparison_version": "   "}, "version"),
+        ({"comparison_version": b"1"}, "version"),
+        ({"comparison_version": True}, "version"),
+        ({"comparison_version": 1}, "version"),
+        ({"comparison_version": object()}, "version"),
         ({"embedding_dimension": 191}, "192"),
         ({"embedding_dimension": 192.0}, "192"),
         ({"normalized": 0}, "boolean"),

@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 
 import voiceid.similarity.comparison as comparison_module
+from voiceid.audio.preprocessing import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
     EmbeddingErrorCode,
     EmbeddingMetadata,
     EmbeddingStatus,
@@ -16,6 +18,7 @@ from voiceid.embeddings.contracts import (
     build_invalid_embedding_result,
 )
 from voiceid.similarity import (
+    SIMILARITY_COMPARISON_VERSION,
     SimilarityErrorCode,
     SimilarityStatus,
     SpeakerSimilarityResult,
@@ -75,7 +78,7 @@ def test_valid_result_contains_fixed_safe_comparison_metadata() -> None:
 
     assert result.metadata is not None
     assert result.metadata.metric == "cosine_similarity"
-    assert result.metadata.comparison_version == "1"
+    assert result.metadata.comparison_version == SIMILARITY_COMPARISON_VERSION
     assert result.metadata.embedding_dimension == 192
     assert result.metadata.normalized is False
     assert result.metadata.to_dict() == {
@@ -425,6 +428,89 @@ def test_incompatible_metadata_is_rejected(
     _assert_invalid(result, SimilarityErrorCode.INCOMPATIBLE_EMBEDDINGS)
 
 
+def test_matching_contract_versions_are_compatible() -> None:
+    result = compare_speaker_embeddings(_result(_basis(0)), _result(_basis(0)))
+
+    assert result.status == SimilarityStatus.VALID
+    assert result.similarity == pytest.approx(1.0, abs=1e-7)
+    assert result.metadata is not None
+    assert result.metadata.comparison_version == SIMILARITY_COMPARISON_VERSION
+
+
+@pytest.mark.parametrize(
+    ("field", "candidate_value"),
+    [
+        ("preprocessing_contract_version", "phase3-v2"),
+        ("embedding_contract_version", "phase4b-v2"),
+        ("backend_version", "fake-backend-v2"),
+    ],
+)
+def test_different_contract_versions_are_incompatible(
+    field: str,
+    candidate_value: str,
+) -> None:
+    candidate = _result(_basis(0))
+    assert candidate.metadata is not None
+    object.__setattr__(candidate.metadata, field, candidate_value)
+
+    result = compare_speaker_embeddings(_result(_basis(0)), candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INCOMPATIBLE_EMBEDDINGS)
+
+
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "preprocessing_contract_version",
+        "embedding_contract_version",
+        "backend_version",
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "   ",
+        b"version",
+        True,
+        1,
+        object(),
+        "/Users/private/version",
+        "v" * 129,
+    ],
+)
+def test_malformed_forged_contract_versions_fail_closed(
+    argument: str,
+    field: str,
+    value: object,
+) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    assert target.metadata is not None
+    object.__setattr__(target.metadata, field, value)
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+
+
+def test_comparison_version_is_output_provenance_not_input_compatibility() -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    assert reference.metadata is not None
+    assert candidate.metadata is not None
+    assert not hasattr(reference.metadata, "comparison_version")
+    assert not hasattr(candidate.metadata, "comparison_version")
+    assert result.metadata is not None
+    assert result.metadata.comparison_version == SIMILARITY_COMPARISON_VERSION
+
+
 def test_non_target_reference_sample_rate_is_incompatible() -> None:
     reference = _tamper(
         _result(_basis(0)),
@@ -612,12 +698,47 @@ def test_untrusted_compatible_model_metadata_is_not_public(
     assert "backend_name" not in result.metadata.to_dict()
 
 
+@pytest.mark.parametrize(
+    ("field", "canary"),
+    [
+        ("preprocessing_contract_version", "/Users/private/PREPROCESS_TOKEN"),
+        ("embedding_contract_version", "SPEAKER_ID_EMBEDDING_CANARY"),
+        ("backend_version", "CACHE_PATH_BACKEND_CANARY"),
+    ],
+)
+def test_forged_version_canaries_are_not_exposed(
+    field: str,
+    canary: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    assert reference.metadata is not None
+    assert candidate.metadata is not None
+    object.__setattr__(reference.metadata, field, canary)
+    object.__setattr__(candidate.metadata, field, canary)
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    surfaces = (
+        repr(result),
+        str(result),
+        str(result.to_dict()),
+        str(result.errors),
+        caplog.text,
+    )
+    assert all(canary not in surface for surface in surfaces)
+
+
 def _metadata(*, device: str = "cpu") -> EmbeddingMetadata:
     return EmbeddingMetadata(
         embedding_dimension=192,
         model_identifier="speechbrain/spkrec-ecapa-voxceleb",
         model_revision="0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
         backend_name="speechbrain-ecapa",
+        backend_version="fake-backend-v1",
+        preprocessing_contract_version=PREPROCESSING_CONTRACT_VERSION,
+        embedding_contract_version=EMBEDDING_CONTRACT_VERSION,
         device=device,
         input_sample_rate_hz=16000,
         input_samples=16000,

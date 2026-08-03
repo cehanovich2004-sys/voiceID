@@ -2,6 +2,7 @@
 
 from voiceid.similarity.comparison import compare_speaker_embeddings
 from voiceid.similarity.contracts import (
+    SIMILARITY_COMPARISON_VERSION,
     SimilarityErrorCode,
     SimilarityIssue,
     SimilarityStatus,
@@ -10,6 +11,7 @@ from voiceid.similarity.contracts import (
 )
 
 __all__ = [
+    "SIMILARITY_COMPARISON_VERSION",
     "SimilarityErrorCode",
     "SimilarityIssue",
     "SimilarityStatus",

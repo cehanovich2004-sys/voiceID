@@ -188,9 +188,10 @@ and L2 norms. Inputs remain read-only `float32` arrays. The result is clipped to
 `[-1.0, 1.0]` only to guard against floating-point overshoot.
 
 Inputs must have compatible dimension, model identifier, pinned revision,
-backend, raw/normalized policy, and 16000 Hz metadata. The calculation works in
-the core installation and does not load models, access the network, or persist
-embeddings.
+backend identity/version, preprocessing contract version, embedding contract
+version, raw/normalized policy, and 16000 Hz metadata. The calculation works
+in the core installation and does not load models, access the network, or
+persist embeddings.
 
 Model identifier, revision, and backend strings are used internally for
 compatibility but omitted from public similarity metadata and serialization.
@@ -199,6 +200,26 @@ Similarity is a raw score, not probability, confidence, or an identity verdict.
 Phase 5A has no biometric threshold and does not return `MATCH`, `NO_MATCH`, or
 `UNCERTAIN`. Experimental calibration is deferred to Phase 5B and requires
 labeled data plus a separate architecture decision.
+
+## Contract Versioning
+
+VoiceID records four stable processing versions:
+
+- preprocessing contract: `phase3-v1`;
+- embedding contract: `phase4b-v1`;
+- SpeechBrain ECAPA backend adapter: `speechbrain-ecapa-adapter-v1`;
+- raw cosine comparison: `1`.
+
+Embedding metadata carries the first three values. Similarity metadata carries
+the comparison version. Version checks make future experimental results more
+reproducible and prevent known processing contracts from being mixed silently.
+Equal versions do not establish biometric accuracy, calibration, legal
+compliance, or production readiness.
+
+This versioning is only a prerequisite for a future Phase 5B experimental
+calibration workflow. This change adds no dataset tooling, threshold selection,
+probability output, identity verdict, enrollment migration, or biometric data
+storage. No migration is needed because enrollment storage does not exist.
 
 ## Quality Checks
 
