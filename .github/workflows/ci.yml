@@ -39,3 +39,31 @@ jobs:
 
       - name: Pytest
         run: pytest
+
+  embeddings-extra:
+    name: Optional embeddings extra
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install optional embeddings dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,embeddings]"
+
+      - name: ML dependency import smoke test
+        run: |
+          python -c "import torch, torchaudio, speechbrain, huggingface_hub; print(torch.__version__); print(torchaudio.__version__); print(speechbrain.__version__); print(huggingface_hub.__version__)"
+
+      - name: Embedding unit tests without model downloads
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: pytest tests/unit/test_embedding_contracts.py tests/unit/test_embedding_policy.py tests/unit/test_embedding_loader.py tests/unit/test_speaker_embedding_service.py tests/unit/test_speechbrain_ecapa_backend.py

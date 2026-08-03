@@ -6,13 +6,13 @@ The product goal is to answer one question:
 
 > Do two audio recordings belong to the same person?
 
-Phase 3 adds deterministic audio preprocessing for the future MVP audio
-pipeline. Voice embeddings, similarity scoring, API endpoints, and user
-interfaces are intentionally deferred to later phases.
+Phase 4 adds a local baseline speaker embedding layer for the MVP audio
+pipeline. Similarity scoring, API endpoints, and user interfaces are
+intentionally deferred to later phases.
 
 ## Current Status
 
-Status: Phase 3, deterministic audio preprocessing.
+Status: Phase 4B, baseline speaker embedding layer in review.
 
 Implemented:
 
@@ -23,14 +23,14 @@ Implemented:
 - local RIFF/WAVE PCM16 metadata validation;
 - deterministic warning and error codes;
 - deterministic PCM16 WAV preprocessing to in-memory float32 mono 16000 Hz;
+- typed, privacy-safe speaker embedding contract;
+- optional SpeechBrain ECAPA-TDNN backend integration;
 - smoke tests;
 - linting, formatting, type checking, and CI setup;
-- documentation, ADR-001, ADR-002, and ADR-003.
+- documentation, ADR-001, ADR-002, ADR-003, and ADR-004.
 
 Not implemented yet:
 
-- ML models;
-- speaker embeddings;
 - similarity engine;
 - API;
 - Streamlit UI.
@@ -61,6 +61,13 @@ Install the project with development dependencies:
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+```
+
+Install the optional embedding backend only when working on Phase 4 model
+inference:
+
+```bash
+python -m pip install -e ".[dev,embeddings]"
 ```
 
 Verify that the package imports:
@@ -119,6 +126,48 @@ succeeded; it does not mean the resulting signal is useful for speaker
 verification. Antiphase stereo or near-constant input can validly produce a
 zero waveform after downmix or DC offset removal.
 
+## Speaker Embeddings
+
+Extract a baseline speaker embedding from a valid Phase 3 result through the
+application service:
+
+```python
+from pathlib import Path
+
+from voiceid.embeddings.backends.speechbrain_ecapa import (
+    SpeechBrainEcapaBackendFactory,
+    default_speechbrain_ecapa_config,
+)
+from voiceid.embeddings.loader import EmbeddingModelLoader
+from voiceid.services import preprocess_wav_file
+from voiceid.services.speaker_embedding import SpeakerEmbeddingService
+
+preprocessed = preprocess_wav_file("sample.wav")
+config = default_speechbrain_ecapa_config(
+    cache_dir=Path("local-model-cache"),
+    offline=True,
+)
+service = SpeakerEmbeddingService(
+    loader=EmbeddingModelLoader(SpeechBrainEcapaBackendFactory(config)),
+)
+result = service.embed(preprocessed)
+```
+
+Phase 4B uses `speechbrain/spkrec-ecapa-voxceleb` pinned to revision
+`0f99f2d0ebe89ac095bcc5903c4dd8f72b367286`. The backend accepts only the
+Phase 3 contract: in-memory mono `float32` waveform, sample rate 16000 Hz, and
+shape `[samples]`. It returns a raw, unnormalized 192-dimensional `float32`
+embedding.
+
+The first model cache preparation is an explicit bootstrap/download operation.
+Runtime can then run in strict offline mode from a prepared local cache. Model
+weights and Hugging Face cache files are not stored in Git.
+
+`VALID` embedding means only that extraction succeeded. It does not mean
+`MATCH`, does not compare two voices, and does not expose probability or a
+threshold. Speaker embeddings are sensitive biometric templates and must not be
+logged, serialized in public payloads, or committed to Git.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
@@ -128,6 +177,14 @@ ruff check .
 ruff format --check .
 mypy src
 pytest
+```
+
+Real-model smoke tests are opt-in and require a prepared local SpeechBrain cache:
+
+```bash
+VOICEID_RUN_REAL_MODEL_TESTS=1 \
+VOICEID_SPEECHBRAIN_ECAPA_CACHE_DIR=/path/to/cache \
+pytest -m real_model
 ```
 
 To apply Ruff formatting:
@@ -149,10 +206,20 @@ voiceID/
 │       │   ├── preprocessing.py
 │       │   ├── validation_policy.py
 │       │   └── wav_reader.py
+│       ├── embeddings/
+│       │   ├── __init__.py
+│       │   ├── contracts.py
+│       │   ├── loader.py
+│       │   ├── policy.py
+│       │   └── backends/
+│       │       ├── __init__.py
+│       │       ├── base.py
+│       │       └── speechbrain_ecapa.py
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── audio_preprocessing.py
-│       │   └── audio_validation.py
+│       │   ├── audio_validation.py
+│       │   └── speaker_embedding.py
 │       ├── config.py
 │       ├── logging_config.py
 │       └── py.typed
@@ -163,6 +230,7 @@ voiceID/
 │   └── test_wav_validation.py
 ├── docs/
 │   ├── ML_PHASE1_AUDIO_AND_BASELINE_RECOMMENDATIONS.md
+│   ├── PHASE4_SPEAKER_EMBEDDINGS.md
 │   ├── PHASE3_AUDIO_PREPROCESSING.md
 │   ├── PHASE2_WAV_VALIDATION.md
 │   ├── VOICEID_PROJECT_SPEC.md
@@ -172,7 +240,8 @@ voiceID/
 │       ├── README.md
 │       ├── ADR-001-project-structure.md
 │       ├── ADR-002-wav-validation.md
-│       └── ADR-003-deterministic-audio-preprocessing.md
+│       ├── ADR-003-deterministic-audio-preprocessing.md
+│       └── ADR-004-baseline-embedding-backend.md
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
@@ -200,8 +269,8 @@ git push -u origin chore/short-description
 
 Open a Pull Request into `main` and wait for technical review before merging.
 
-Do not commit real voice recordings, speaker embeddings, model weights, or
-datasets to Git.
+Do not commit real voice recordings, speaker embeddings, model weights, model
+caches, access tokens, or datasets to Git.
 
 ## Similarity Is Not Probability
 

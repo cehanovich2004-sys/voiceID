@@ -52,9 +52,12 @@ Completion criteria:
 
 - one backend is selected through an ADR;
 - model loading is isolated from application services;
-- embeddings are produced for validated audio;
-- tests use mocks for unit coverage and a small real-audio smoke test where
-  practical.
+- embeddings are produced from Phase 3 preprocessed audio;
+- public contracts hide embedding values and paths;
+- zero or near-zero preprocessed waveforms are rejected before model inference;
+- tests use fake backends for unit coverage and opt-in real-model smoke tests
+  with synthetic audio and prepared local cache;
+- similarity, probability, thresholds, and verdicts remain out of scope.
 
 ## Phase 5: Similarity Engine
 

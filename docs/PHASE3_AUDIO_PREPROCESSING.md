@@ -1,6 +1,6 @@
 # Phase 3: Deterministic Audio Preprocessing
 
-Status: implemented in feature branch, pending CTO review.
+Status: accepted and merged.
 
 Phase 3 prepares Phase 2-valid WAV files for future speaker embedding
 experiments. It converts supported PCM16 WAV input into deterministic float32
