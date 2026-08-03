@@ -1,6 +1,6 @@
 # ADR-003: Deterministic Audio Preprocessing
 
-Status: Accepted for Phase 3 implementation, pending CTO review of PR.
+Status: Accepted and merged.
 
 ## Decision
 

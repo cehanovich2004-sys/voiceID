@@ -29,6 +29,12 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.6",
 ]
+embeddings = [
+  "huggingface_hub>=0.24,<1",
+  "speechbrain==1.1.0",
+  "torch==2.8.0",
+  "torchaudio==2.8.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -38,6 +44,9 @@ voiceid = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "real_model: opt-in tests that require a prepared local model cache and ML dependencies",
+]
 
 [tool.ruff]
 line-length = 88
