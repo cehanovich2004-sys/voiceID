@@ -91,7 +91,8 @@ voiceID/
 │   └── voiceid/
 │       ├── __init__.py
 │       ├── config.py
-│       └── logging_config.py
+│       ├── logging_config.py
+│       └── py.typed
 ├── tests/
 │   ├── __init__.py
 │   └── test_smoke.py
