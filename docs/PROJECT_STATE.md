@@ -2,91 +2,62 @@
 
 ## Current Phase
 
-Phase 3: deterministic audio preprocessing.
+Phase 5A: safe speaker embedding similarity.
 
-Implementation status: in progress in feature branch, pending checks and Pull
-Request review.
+Implementation status: implemented in
+`feature/phase-5a-speaker-similarity`, pending independent QA, CTO review, and
+merge. Phase 5A must not be treated as completed before merge.
 
-## Completed In Phase 1
+## Completed Phases
 
-- Created `src`-layout Python package.
-- Added minimal application configuration.
-- Added centralized standard-library logging setup.
-- Added smoke tests.
-- Added `pyproject.toml` with pytest, Ruff, and mypy configuration.
-- Added GitHub Actions CI.
-- Added README, roadmap, project state, and ADR-001.
-- Moved the project specification into `docs/`.
+- Phase 1 established the installable `src`-layout package, quality gates, CI,
+  and architecture documentation.
+- Phase 2 added safe RIFF/WAVE PCM16 loading and technical validation.
+- Phase 3 added deterministic preprocessing to float32 mono 16000 Hz waveform.
+- Phase 4B added the optional local SpeechBrain ECAPA-TDNN embedding backend,
+  typed privacy-safe contracts, offline cache handling, and fake/real-model
+  tests.
 
-## Completed In Phase 2
+## Phase 5A Implementation Under Review
 
-- Added typed validation result models with stable statuses, warnings, and
-  errors.
-- Added configurable `AudioValidationPolicy` for WAV technical limits and
-  deterministic signal-level heuristics.
-- Added RIFF/WAVE header inspection and PCM16 chunked signal statistics using
-  the Python standard library.
-- Added application service `validate_wav_file()`.
-- Added synthetic WAV tests for valid, invalid, and warning scenarios.
-- Added Phase 2 validation documentation and ADR-002.
-
-## Completed In Phase 3
-
-- Added deterministic preprocessing from Phase 2-valid PCM16 WAV input to
-  float32 mono 16000 Hz waveform output.
-- Added `numpy` and `scipy` runtime dependencies for array processing and
-  polyphase resampling.
-- Added typed preprocessing result models and application service
-  `preprocess_wav_file()`.
-- Added synthetic preprocessing tests for downmixing, resampling, DC offset
-  removal, safety clipping, deterministic output, and privacy guardrails.
-- Added Phase 3 preprocessing documentation and ADR-003.
+- Added a pure `compare_speaker_embeddings()` application API.
+- Added typed `VALID`/`INVALID` similarity contracts with one stable error.
+- Added float64 cosine calculation and numeric overshoot clipping.
+- Added fail-closed runtime validation and deterministic error precedence.
+- Added compatibility checks for model, revision, backend, dimension,
+  normalized policy, and 16000 Hz input contract.
+- Added privacy, immutability, exception sanitization, and core-only tests.
+- Added ADR-005 and Phase 5A technical documentation.
 
 ## Assumptions
 
-- Python 3.11 is the safest Phase 1 runtime target for future ML dependency
-  compatibility.
-- The `>=3.11,<3.12` runtime range is a temporary Phase 1 constraint, not a
-  long-term product requirement. Compatibility will be reviewed before adding
-  audio and ML dependencies.
-- The MVP should remain a modular monolith until real scaling pressure exists.
-- The original project specification is retained as product context, while
-  Phase 1 uses `src`-layout instead of the earlier draft `app/` layout.
-- No audio, ML, API, UI, or database logic belongs in Phase 1.
-- Phase 3 preprocessing accepts Phase 2-valid input, including files that are
-  valid with warnings. It does not decide speaker-verification suitability.
+- Python remains constrained to `>=3.11,<3.12` pending a separate dependency
+  compatibility review.
+- The MVP remains a modular monolith.
+- Current embeddings share the unchanged Phase 3 preprocessing v1 pipeline.
+- Raw cosine similarity has no probability or identity-decision meaning.
 
 ## Open Questions
 
-- Should Phase 2 remain WAV-only after CTO review, or should additional local
-  formats be considered in a later phase?
-- Should the conservative low-level and clipping heuristic thresholds be tuned
-  after collecting non-sensitive test samples?
-- What labeled evaluation data can be used later for similarity threshold
-  calibration?
-- Should future ML backend requirements change the target preprocessing
-  contract beyond mono 16000 Hz float32?
-- Should Phase 4 keep waveform arrays in memory only, or introduce explicit
-  temporary storage with a separate privacy and retention decision?
+- What approved labeled dataset and evaluation protocol can support Phase 5B?
+- Which privacy, consent, retention, and legal controls are required before any
+  real biometric evaluation?
+- How should a future preprocessing contract version be represented before
+  pipeline changes are introduced?
+- Which robustness, fairness, and anti-spoofing evaluations are required before
+  production consideration?
 
 ## Known Risks
 
-- Voice verification is biometric functionality and will require careful
-  privacy, security, consent, and retention decisions before real use.
-- Future ML dependencies may impose stricter Python, OS, or hardware
-  constraints.
-- Cosine similarity can be useful for comparison but is not a probability
-  without calibration on labeled data.
-- Short, noisy, or low-quality recordings may produce misleading results in
-  later phases.
-- Technical validation only confirms container and signal-level constraints. It
-  does not confirm speech presence, speaker count, authenticity, or suitability
-  for speaker verification.
-- Deterministic preprocessing can make audio structurally compatible with a
-  future embedding backend, but it does not prove that enough usable speech is
-  present.
+- Speaker embeddings are sensitive biometric templates.
+- Same-model metadata compatibility does not prove biometric accuracy.
+- Score distributions can shift with model, preprocessing, channel, language,
+  recording device, noise, and population changes.
+- Cosine similarity is not probability or confidence without calibration.
+- Phase 5A has no threshold, verdict, enrollment, anti-spoofing, or production
+  biometric controls.
 
 ## Next Step
 
-Open Phase 3 Pull Request for CTO review. Do not start Phase 4 until Phase 3 is
-reviewed and merged.
+Open a Draft Pull Request for independent QA and CTO review. Do not start Phase
+5B and do not merge without separate CTO approval.

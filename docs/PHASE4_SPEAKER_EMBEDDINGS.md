@@ -1,6 +1,6 @@
 # Phase 4: Baseline Speaker Embeddings
 
-Status: implemented in feature branch, pending CTO review.
+Status: accepted and merged in Phase 4B.
 
 Phase 4B adds a local, typed, privacy-safe speaker embedding layer. It consumes
 only Phase 3 `PreprocessedAudioResult` objects and produces a validated

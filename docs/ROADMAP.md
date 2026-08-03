@@ -59,16 +59,31 @@ Completion criteria:
   with synthetic audio and prepared local cache;
 - similarity, probability, thresholds, and verdicts remain out of scope.
 
-## Phase 5: Similarity Engine
+## Phase 5A: Safe Speaker Embedding Similarity
 
-Goal: compare embeddings and return a decision.
+Goal: compare compatible embeddings and return a raw cosine similarity score.
 
 Completion criteria:
 
-- cosine similarity is implemented;
-- output distinguishes `MATCH`, `NO MATCH`, and `UNCERTAIN`;
-- thresholds are documented as experimental defaults;
-- documentation clearly states that similarity is not probability.
+- cosine similarity uses float64 accumulation and deterministic validation;
+- only compatible Phase 4B embedding results can be compared;
+- public contracts hide embeddings, norms, paths, and internal exceptions;
+- the core installation works without ML dependencies, network, or models;
+- documentation states that similarity is not probability or a decision;
+- no biometric threshold or verdict is introduced.
+
+## Phase 5B: Experimental Calibration
+
+Goal: evaluate score distributions on approved labeled data before considering
+any biometric decision policy.
+
+Completion criteria:
+
+- dataset, consent, privacy, and evaluation requirements are approved;
+- same-speaker and different-speaker score distributions are measured;
+- calibration and threshold alternatives are documented in a separate ADR;
+- no probability or identity verdict is exposed without experimental evidence
+  and explicit approval.
 
 ## Phase 6: MVP Interface
 
