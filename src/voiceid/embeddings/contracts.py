@@ -96,6 +96,23 @@ class SpeakerEmbeddingResult:
     metadata: EmbeddingMetadata | None
     errors: tuple[EmbeddingIssue, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Enforce the public result invariants at construction time."""
+
+        if self.status == EmbeddingStatus.VALID:
+            _validate_valid_result(
+                embedding=self.embedding,
+                metadata=self.metadata,
+                errors=self.errors,
+            )
+            return
+
+        _validate_invalid_result(
+            embedding=self.embedding,
+            metadata=self.metadata,
+            errors=self.errors,
+        )
+
     @property
     def is_valid(self) -> bool:
         """Return whether a valid embedding was produced."""
@@ -140,3 +157,41 @@ def build_invalid_embedding_result(
         metadata=None,
         errors=(EmbeddingIssue(code=code.value, message=message),),
     )
+
+
+def _validate_valid_result(
+    *,
+    embedding: EmbeddingVector | None,
+    metadata: EmbeddingMetadata | None,
+    errors: tuple[EmbeddingIssue, ...],
+) -> None:
+    if embedding is None:
+        raise ValueError("VALID embedding result requires an embedding.")
+    if metadata is None:
+        raise ValueError("VALID embedding result requires metadata.")
+    if errors:
+        raise ValueError("VALID embedding result cannot contain errors.")
+    if not isinstance(embedding, np.ndarray):
+        raise ValueError("VALID embedding result requires a numpy embedding.")
+    if embedding.dtype != np.float32:
+        raise ValueError("VALID embedding result requires float32 embedding dtype.")
+    if embedding.ndim != 1:
+        raise ValueError("VALID embedding result requires a one-dimensional embedding.")
+    if embedding.shape != (metadata.embedding_dimension,):
+        raise ValueError("VALID embedding result shape must match metadata dimension.")
+    if not np.all(np.isfinite(embedding)):
+        raise ValueError("VALID embedding result requires finite embedding values.")
+
+
+def _validate_invalid_result(
+    *,
+    embedding: EmbeddingVector | None,
+    metadata: EmbeddingMetadata | None,
+    errors: tuple[EmbeddingIssue, ...],
+) -> None:
+    if embedding is not None:
+        raise ValueError("INVALID embedding result cannot contain an embedding.")
+    if metadata is not None:
+        raise ValueError("INVALID embedding result cannot contain metadata.")
+    if not errors:
+        raise ValueError("INVALID embedding result requires at least one error.")

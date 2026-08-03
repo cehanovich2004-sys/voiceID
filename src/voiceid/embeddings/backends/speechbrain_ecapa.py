@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 
@@ -95,19 +95,19 @@ class SpeechBrainEcapaBackend(EmbeddingBackend):
             ).unsqueeze(0)
             with torch.inference_mode():
                 output = self._classifier.encode_batch(tensor, normalize=False)
-            embedding = output.detach().cpu().numpy().astype(np.float32, copy=False)
+            embedding = _extract_speechbrain_embedding(output)
         except KeyboardInterrupt:
             raise
         except SystemExit:
             raise
         except MemoryError:
             raise
+        except EmbeddingModelError:
+            raise
         except Exception as exc:
             raise EmbeddingModelError(EmbeddingErrorCode.INFERENCE_FAILED) from exc
 
-        return cast(
-            EmbeddingVector, np.asarray(embedding.reshape(-1), dtype=np.float32)
-        )
+        return embedding
 
 
 class SpeechBrainEcapaBackendFactory(EmbeddingBackendFactory):
@@ -240,3 +240,17 @@ def _set_eval(classifier: Any) -> None:
     modules = getattr(classifier, "mods", None)
     if modules is not None and hasattr(modules, "eval"):
         modules.eval()
+
+
+def _extract_speechbrain_embedding(output: Any) -> EmbeddingVector:
+    array = output.detach().cpu().numpy()
+    embedding = np.asarray(array, dtype=np.float32)
+    if embedding.shape == (
+        1,
+        1,
+        SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION,
+    ):
+        return embedding[0, 0, :].copy()
+    if embedding.shape == (1, SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION):
+        return embedding[0, :].copy()
+    raise EmbeddingModelError(EmbeddingErrorCode.INVALID_EMBEDDING_SHAPE)
