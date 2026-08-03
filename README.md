@@ -6,13 +6,13 @@ The product goal is to answer one question:
 
 > Do two audio recordings belong to the same person?
 
-Phase 4 adds a local baseline speaker embedding layer for the MVP audio
-pipeline. Similarity scoring, API endpoints, and user interfaces are
-intentionally deferred to later phases.
+Phase 5A adds safe raw cosine similarity for two compatible speaker embeddings.
+Biometric decisions, probability, API endpoints, and user interfaces remain
+deferred.
 
 ## Current Status
 
-Status: Phase 4B, baseline speaker embedding layer in review.
+Status: Phase 5A implementation in a feature branch, pending QA and merge.
 
 Implemented:
 
@@ -25,13 +25,15 @@ Implemented:
 - deterministic PCM16 WAV preprocessing to in-memory float32 mono 16000 Hz;
 - typed, privacy-safe speaker embedding contract;
 - optional SpeechBrain ECAPA-TDNN backend integration;
+- typed, privacy-safe raw cosine similarity contract;
+- deterministic compatibility validation and error precedence;
 - smoke tests;
 - linting, formatting, type checking, and CI setup;
-- documentation, ADR-001, ADR-002, ADR-003, and ADR-004.
+- documentation and ADR-001 through ADR-005.
 
 Not implemented yet:
 
-- similarity engine;
+- biometric thresholds and identity verdicts;
 - API;
 - Streamlit UI.
 
@@ -168,6 +170,35 @@ weights and Hugging Face cache files are not stored in Git.
 threshold. Speaker embeddings are sensitive biometric templates and must not be
 logged, serialized in public payloads, or committed to Git.
 
+## Speaker Similarity
+
+Compare two compatible Phase 4B embedding results through the public
+application API:
+
+```python
+from voiceid.services import compare_speaker_embeddings
+
+result = compare_speaker_embeddings(reference, candidate)
+print(result.to_dict())
+```
+
+Phase 5A uses cosine similarity with `float64` accumulation for the dot product
+and L2 norms. Inputs remain read-only `float32` arrays. The result is clipped to
+`[-1.0, 1.0]` only to guard against floating-point overshoot.
+
+Inputs must have compatible dimension, model identifier, pinned revision,
+backend, raw/normalized policy, and 16000 Hz metadata. The calculation works in
+the core installation and does not load models, access the network, or persist
+embeddings.
+
+Model identifier, revision, and backend strings are used internally for
+compatibility but omitted from public similarity metadata and serialization.
+
+Similarity is a raw score, not probability, confidence, or an identity verdict.
+Phase 5A has no biometric threshold and does not return `MATCH`, `NO_MATCH`, or
+`UNCERTAIN`. Experimental calibration is deferred to Phase 5B and requires
+labeled data plus a separate architecture decision.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
@@ -215,6 +246,10 @@ voiceID/
 │       │       ├── __init__.py
 │       │       ├── base.py
 │       │       └── speechbrain_ecapa.py
+│       ├── similarity/
+│       │   ├── __init__.py
+│       │   ├── comparison.py
+│       │   └── contracts.py
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── audio_preprocessing.py
@@ -225,12 +260,19 @@ voiceID/
 │       └── py.typed
 ├── tests/
 │   ├── __init__.py
+│   ├── integration/
+│   │   ├── test_speaker_similarity.py
+│   │   └── test_speechbrain_ecapa.py
+│   ├── unit/
+│   │   ├── test_similarity_contracts.py
+│   │   └── test_speaker_similarity.py
 │   ├── test_audio_preprocessing.py
 │   ├── test_smoke.py
 │   └── test_wav_validation.py
 ├── docs/
 │   ├── ML_PHASE1_AUDIO_AND_BASELINE_RECOMMENDATIONS.md
 │   ├── PHASE4_SPEAKER_EMBEDDINGS.md
+│   ├── PHASE5A_SPEAKER_SIMILARITY.md
 │   ├── PHASE3_AUDIO_PREPROCESSING.md
 │   ├── PHASE2_WAV_VALIDATION.md
 │   ├── VOICEID_PROJECT_SPEC.md
@@ -241,7 +283,8 @@ voiceID/
 │       ├── ADR-001-project-structure.md
 │       ├── ADR-002-wav-validation.md
 │       ├── ADR-003-deterministic-audio-preprocessing.md
-│       └── ADR-004-baseline-embedding-backend.md
+│       ├── ADR-004-baseline-embedding-backend.md
+│       └── ADR-005-raw-cosine-similarity.md
 ├── .github/
 │   └── workflows/
 │       └── ci.yml

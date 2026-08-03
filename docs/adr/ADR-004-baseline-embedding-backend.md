@@ -1,6 +1,6 @@
 # ADR-004: Baseline Speaker Embedding Backend
 
-Status: Accepted for Phase 4B implementation, pending CTO review of PR.
+Status: Accepted and merged in Phase 4B.
 
 ## Decision
 
