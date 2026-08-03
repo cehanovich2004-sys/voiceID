@@ -198,6 +198,42 @@ def test_truncated_wav_is_invalid_with_decode_error(tmp_path: Path) -> None:
     _assert_error(result, ValidationErrorCode.DECODE_ERROR)
 
 
+def test_duplicate_fmt_chunk_is_invalid_without_path_leak(tmp_path: Path) -> None:
+    audio_path = tmp_path / "duplicate-fmt.wav"
+    fmt_chunk = _pcm16_fmt_chunk()
+    data_chunk = _pcm16_data_chunk(sample_value=8192)
+    _write_manual_riff_wav(
+        audio_path,
+        chunks=(
+            _chunk(b"fmt ", fmt_chunk)
+            + _chunk(b"fmt ", fmt_chunk)
+            + _chunk(b"data", data_chunk)
+        ),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_decode_error_without_path_leak(result, tmp_path)
+
+
+def test_duplicate_data_chunk_is_invalid_without_path_leak(tmp_path: Path) -> None:
+    audio_path = tmp_path / "duplicate-data.wav"
+    fmt_chunk = _pcm16_fmt_chunk()
+    data_chunk = _pcm16_data_chunk(sample_value=8192)
+    _write_manual_riff_wav(
+        audio_path,
+        chunks=(
+            _chunk(b"fmt ", fmt_chunk)
+            + _chunk(b"data", data_chunk)
+            + _chunk(b"data", data_chunk)
+        ),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_decode_error_without_path_leak(result, tmp_path)
+
+
 def test_unsupported_wav_codec_is_invalid(tmp_path: Path) -> None:
     audio_path = tmp_path / "float.wav"
     _write_ieee_float_wav(audio_path)
@@ -205,6 +241,63 @@ def test_unsupported_wav_codec_is_invalid(tmp_path: Path) -> None:
     result = validate_wav_file(audio_path)
 
     _assert_error(result, ValidationErrorCode.UNSUPPORTED_WAV_CODEC)
+
+
+def test_corrupted_pcm16_byte_rate_is_invalid_without_path_leak(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "bad-byte-rate.wav"
+    _write_manual_wav(
+        audio_path,
+        fmt_chunk=_pcm16_fmt_chunk(byte_rate=1),
+        data_chunk=_pcm16_data_chunk(sample_value=8192),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_decode_error_without_path_leak(result, tmp_path)
+
+
+def test_corrupted_pcm16_block_align_is_invalid(tmp_path: Path) -> None:
+    audio_path = tmp_path / "bad-block-align.wav"
+    _write_manual_wav(
+        audio_path,
+        fmt_chunk=_pcm16_fmt_chunk(block_align=1),
+        data_chunk=_pcm16_data_chunk(sample_value=8192),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_pcm16_byte_rate_must_match_sample_rate_times_block_align(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "bad-byte-rate-formula.wav"
+    _write_manual_wav(
+        audio_path,
+        fmt_chunk=_pcm16_fmt_chunk(sample_rate_hz=16000, block_align=2, byte_rate=2),
+        data_chunk=_pcm16_data_chunk(sample_value=8192),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_correct_manual_pcm16_header_remains_valid(tmp_path: Path) -> None:
+    audio_path = tmp_path / "manual-valid.wav"
+    _write_manual_wav(
+        audio_path,
+        fmt_chunk=_pcm16_fmt_chunk(),
+        data_chunk=_pcm16_data_chunk(sample_value=8192),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    assert result.status == ValidationStatus.VALID
+    assert result.errors == ()
 
 
 def test_non_pcm16_wav_is_invalid(tmp_path: Path) -> None:
@@ -379,6 +472,140 @@ def test_internal_decode_exception_is_controlled(
     assert str(tmp_path) not in repr(result.to_dict())
 
 
+def test_unexpected_reader_exception_is_sanitized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    audio_path = _write_pcm16_wav(tmp_path / "unexpected.wav", sample_value=8192)
+
+    def raise_unexpected_error(*_args: object, **_kwargs: object) -> object:
+        msg = f"unexpected decoder failed at {audio_path.resolve()}"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(
+        "voiceid.services.audio_validation.read_wav_header",
+        raise_unexpected_error,
+    )
+
+    result = validate_wav_file(audio_path)
+
+    _assert_decode_error_without_path_leak(result, tmp_path)
+    resolved_audio_path = str(audio_path.resolve())
+    assert resolved_audio_path not in repr(result)
+    assert resolved_audio_path not in repr(result.to_dict())
+    assert resolved_audio_path not in " ".join(error.message for error in result.errors)
+    assert resolved_audio_path not in caplog.text
+
+
+def test_trailing_junk_chunk_outside_declared_riff_size_is_invalid(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "trailing-junk.wav"
+    valid_payload = _valid_riff_payload()
+    actual_bytes = _riff_bytes(valid_payload) + _chunk(b"JUNK", b"extra")
+    audio_path.write_bytes(actual_bytes)
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_trailing_byte_outside_declared_riff_size_is_invalid(tmp_path: Path) -> None:
+    audio_path = tmp_path / "trailing-byte.wav"
+    audio_path.write_bytes(_riff_bytes(_valid_riff_payload()) + b"\x00")
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_declared_riff_size_smaller_than_actual_file_is_invalid(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "declared-smaller.wav"
+    payload = _valid_riff_payload()
+    riff_size = len(b"WAVE" + payload) - 1
+    audio_path.write_bytes(b"RIFF" + struct.pack("<I", riff_size) + b"WAVE" + payload)
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_declared_riff_size_larger_than_actual_file_is_invalid(tmp_path: Path) -> None:
+    audio_path = tmp_path / "declared-larger.wav"
+    payload = _valid_riff_payload()
+    riff_size = len(b"WAVE" + payload) + 1
+    audio_path.write_bytes(b"RIFF" + struct.pack("<I", riff_size) + b"WAVE" + payload)
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_chunk_payload_crossing_declared_riff_boundary_is_invalid(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "chunk-crosses-boundary.wav"
+    truncated_data_chunk = b"data" + struct.pack("<I", 100) + b"\x00\x20"
+    payload = _chunk(b"fmt ", _pcm16_fmt_chunk()) + truncated_data_chunk
+    audio_path.write_bytes(_riff_bytes(payload))
+
+    result = validate_wav_file(audio_path)
+
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+
+
+def test_unknown_ancillary_chunk_inside_riff_boundary_is_allowed(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "ancillary.wav"
+    _write_manual_riff_wav(
+        audio_path,
+        chunks=(
+            _chunk(b"fmt ", _pcm16_fmt_chunk())
+            + _chunk(b"JUNK", b"safe")
+            + _chunk(b"data", _pcm16_data_chunk(sample_value=8192))
+        ),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    assert result.status == ValidationStatus.VALID
+    assert result.errors == ()
+
+
+def test_odd_sized_ancillary_chunk_padding_inside_riff_boundary_is_allowed(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "ancillary-padding.wav"
+    _write_manual_riff_wav(
+        audio_path,
+        chunks=(
+            _chunk(b"fmt ", _pcm16_fmt_chunk())
+            + _chunk(b"JUNK", b"odd")
+            + _chunk(b"data", _pcm16_data_chunk(sample_value=8192))
+        ),
+    )
+
+    result = validate_wav_file(audio_path)
+
+    assert result.status == ValidationStatus.VALID
+    assert result.errors == ()
+
+
+def test_normal_valid_wav_remains_valid_after_strict_riff_checks(
+    tmp_path: Path,
+) -> None:
+    audio_path = _write_pcm16_wav(tmp_path / "normal-valid.wav", sample_value=8192)
+
+    result = validate_wav_file(audio_path)
+
+    assert result.status == ValidationStatus.VALID
+    assert result.errors == ()
+
+
 def test_public_result_dict_contains_stable_contract(tmp_path: Path) -> None:
     audio_path = _write_pcm16_wav(tmp_path / "contract.wav", sample_value=8192)
 
@@ -411,6 +638,19 @@ def _assert_error(
     assert result.status == ValidationStatus.INVALID
     assert result.is_valid is False
     assert code.value in _error_codes(result)
+
+
+def _assert_decode_error_without_path_leak(
+    result: AudioValidationResult,
+    tmp_path: Path,
+) -> None:
+    _assert_error(result, ValidationErrorCode.DECODE_ERROR)
+    assert len(result.errors) == 1
+    issue = result.errors[0]
+    assert issue.code == ValidationErrorCode.DECODE_ERROR.value
+    assert str(tmp_path) not in repr(result)
+    assert str(tmp_path) not in repr(result.to_dict())
+    assert str(tmp_path) not in issue.message
 
 
 def _error_codes(result: AudioValidationResult) -> set[str]:
@@ -502,13 +742,66 @@ def _write_truncated_wav(path: Path) -> None:
 
 
 def _write_manual_wav(path: Path, *, fmt_chunk: bytes, data_chunk: bytes) -> None:
-    chunks = (
-        b"fmt "
-        + struct.pack("<I", len(fmt_chunk))
-        + fmt_chunk
-        + b"data"
-        + struct.pack("<I", len(data_chunk))
-        + data_chunk
+    _write_manual_riff_wav(
+        path,
+        chunks=_chunk(b"fmt ", fmt_chunk) + _chunk(b"data", data_chunk),
     )
-    riff_size = 4 + len(chunks)
-    path.write_bytes(b"RIFF" + struct.pack("<I", riff_size) + b"WAVE" + chunks)
+
+
+def _write_manual_riff_wav(path: Path, *, chunks: bytes) -> None:
+    path.write_bytes(_riff_bytes(chunks))
+
+
+def _riff_bytes(chunks: bytes) -> bytes:
+    riff_payload = b"WAVE" + chunks
+    riff_size = len(riff_payload)
+    return b"RIFF" + struct.pack("<I", riff_size) + riff_payload
+
+
+def _chunk(chunk_id: bytes, data: bytes) -> bytes:
+    padding = b"\x00" if len(data) % 2 else b""
+    return chunk_id + struct.pack("<I", len(data)) + data + padding
+
+
+def _valid_riff_payload() -> bytes:
+    return _chunk(b"fmt ", _pcm16_fmt_chunk()) + _chunk(
+        b"data",
+        _pcm16_data_chunk(sample_value=8192),
+    )
+
+
+def _pcm16_fmt_chunk(
+    *,
+    channels: int = 1,
+    sample_rate_hz: int = 16000,
+    byte_rate: int | None = None,
+    block_align: int | None = None,
+) -> bytes:
+    sample_width_bytes = 2
+    actual_block_align = (
+        block_align if block_align is not None else channels * sample_width_bytes
+    )
+    actual_byte_rate = (
+        byte_rate if byte_rate is not None else sample_rate_hz * actual_block_align
+    )
+    return struct.pack(
+        "<HHIIHH",
+        1,
+        channels,
+        sample_rate_hz,
+        actual_byte_rate,
+        actual_block_align,
+        sample_width_bytes * 8,
+    )
+
+
+def _pcm16_data_chunk(
+    *,
+    sample_rate_hz: int = 16000,
+    channels: int = 1,
+    duration_seconds: float = 1.0,
+    sample_value: int = 4096,
+) -> bytes:
+    frame_count = int(round(sample_rate_hz * duration_seconds))
+    frame = struct.pack("<h", sample_value) * channels
+    return frame * frame_count

@@ -38,6 +38,19 @@ def validate_wav_file(
     exposes the canonical or absolute local path.
     """
 
+    try:
+        return _validate_wav_file(file_path, policy=policy)
+    except Exception:
+        return _safe_decode_error_result(file_path)
+
+
+def _validate_wav_file(
+    file_path: str | Path,
+    *,
+    policy: AudioValidationPolicy | None = None,
+) -> AudioValidationResult:
+    """Internal implementation for the public WAV validation boundary."""
+
     active_policy = policy or AudioValidationPolicy()
     path = Path(file_path)
     file_name = _safe_file_name(path)
@@ -445,6 +458,27 @@ def _safe_file_name(path: Path) -> str:
         for character in name
     ).strip()
     return safe_name or "audio.wav"
+
+
+def _safe_file_name_from_input(file_path: str | Path) -> str:
+    try:
+        return _safe_file_name(Path(file_path))
+    except Exception:
+        return "audio.wav"
+
+
+def _safe_decode_error_result(file_path: str | Path) -> AudioValidationResult:
+    return build_validation_result(
+        file_name=_safe_file_name_from_input(file_path),
+        metadata=None,
+        warnings=[],
+        errors=[
+            _error(
+                ValidationErrorCode.DECODE_ERROR,
+                "The WAV file could not be decoded safely.",
+            )
+        ],
+    )
 
 
 def _format_allowed_values(values: frozenset[int]) -> str:

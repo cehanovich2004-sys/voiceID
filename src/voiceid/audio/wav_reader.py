@@ -84,13 +84,22 @@ def read_wav_header(path: Path) -> WavHeader:
             if riff_header[:4] != b"RIFF" or riff_header[8:12] != b"WAVE":
                 raise WavContainerError
 
+            riff_size = struct.unpack("<I", riff_header[4:8])[0]
+            declared_file_size = 8 + riff_size
+            if (
+                declared_file_size != file_size
+                or declared_file_size < _RIFF_HEADER_SIZE
+            ):
+                raise WavDecodeError
+
             fmt_fields: tuple[int, int, int, int, int, int] | None = None
             data_size_bytes: int | None = None
 
-            while wav_file.tell() < file_size:
+            while wav_file.tell() < declared_file_size:
+                if declared_file_size - wav_file.tell() < _CHUNK_HEADER_SIZE:
+                    raise WavDecodeError
+
                 chunk_header = wav_file.read(_CHUNK_HEADER_SIZE)
-                if not chunk_header:
-                    break
                 if len(chunk_header) < _CHUNK_HEADER_SIZE:
                     raise WavDecodeError
 
@@ -98,24 +107,32 @@ def read_wav_header(path: Path) -> WavHeader:
                 chunk_size = struct.unpack("<I", chunk_header[4:8])[0]
                 chunk_start = wav_file.tell()
                 chunk_end = chunk_start + chunk_size
-                if chunk_end > file_size:
+                padded_chunk_end = chunk_end + (chunk_size % 2)
+                if (
+                    chunk_end > declared_file_size
+                    or padded_chunk_end > declared_file_size
+                ):
                     raise WavDecodeError
 
                 if chunk_id == b"fmt ":
+                    if fmt_fields is not None:
+                        raise WavDecodeError
                     chunk_data = wav_file.read(chunk_size)
                     if len(chunk_data) != chunk_size:
                         raise WavDecodeError
                     fmt_fields = _parse_fmt_chunk(chunk_data)
                 elif chunk_id == b"data":
+                    if data_size_bytes is not None:
+                        raise WavDecodeError
                     data_size_bytes = chunk_size
                     wav_file.seek(chunk_end)
                 else:
                     wav_file.seek(chunk_end)
 
-                if chunk_size % 2:
-                    if wav_file.tell() + 1 > file_size:
-                        raise WavDecodeError
-                    wav_file.seek(1, 1)
+                wav_file.seek(padded_chunk_end)
+
+            if wav_file.tell() != declared_file_size:
+                raise WavDecodeError
 
             if fmt_fields is None or data_size_bytes is None:
                 raise WavDecodeError
@@ -123,6 +140,14 @@ def read_wav_header(path: Path) -> WavHeader:
             format_tag, channels, sample_rate, byte_rate, block_align, bits = fmt_fields
             if block_align <= 0 or data_size_bytes % block_align != 0:
                 raise WavDecodeError
+            if format_tag == PCM_FORMAT_TAG and bits == 16:
+                _validate_pcm16_header_consistency(
+                    channels=channels,
+                    sample_rate_hz=sample_rate,
+                    byte_rate=byte_rate,
+                    block_align=block_align,
+                    sample_width_bits=bits,
+                )
 
             return WavHeader(
                 format_tag=format_tag,
@@ -221,6 +246,21 @@ def _parse_fmt_chunk(
     if len(chunk_data) < _FMT_CHUNK_MIN_SIZE:
         raise WavDecodeError
     return struct.unpack("<HHIIHH", chunk_data[:_FMT_CHUNK_MIN_SIZE])
+
+
+def _validate_pcm16_header_consistency(
+    *,
+    channels: int,
+    sample_rate_hz: int,
+    byte_rate: int,
+    block_align: int,
+    sample_width_bits: int,
+) -> None:
+    sample_width_bytes = sample_width_bits // 8
+    expected_block_align = channels * sample_width_bytes
+    expected_byte_rate = sample_rate_hz * expected_block_align
+    if block_align != expected_block_align or byte_rate != expected_byte_rate:
+        raise WavDecodeError
 
 
 def _assert_wave_matches_header(wav_file: wave.Wave_read, header: WavHeader) -> None:
