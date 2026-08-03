@@ -2,9 +2,11 @@
 
 ## Current Phase
 
-Phase 1: project foundation.
+Phase 2: WAV loading and technical validation.
 
-## Completed In This Phase
+Implementation status: complete in feature branch, pending Pull Request review.
+
+## Completed In Phase 1
 
 - Created `src`-layout Python package.
 - Added minimal application configuration.
@@ -14,6 +16,18 @@ Phase 1: project foundation.
 - Added GitHub Actions CI.
 - Added README, roadmap, project state, and ADR-001.
 - Moved the project specification into `docs/`.
+
+## Completed In Phase 2
+
+- Added typed validation result models with stable statuses, warnings, and
+  errors.
+- Added configurable `AudioValidationPolicy` for WAV technical limits and
+  deterministic signal-level heuristics.
+- Added RIFF/WAVE header inspection and PCM16 chunked signal statistics using
+  the Python standard library.
+- Added application service `validate_wav_file()`.
+- Added synthetic WAV tests for valid, invalid, and warning scenarios.
+- Added Phase 2 validation documentation and ADR-002.
 
 ## Assumptions
 
@@ -29,10 +43,10 @@ Phase 1: project foundation.
 
 ## Open Questions
 
-- Which audio formats should Phase 2 accept beyond WAV, if any?
-- What minimum audio duration should be considered valid?
-- Should Phase 2 normalize all inputs to 16 kHz immediately or only report
-  metadata first?
+- Should Phase 2 remain WAV-only after CTO review, or should additional local
+  formats be considered in a later phase?
+- Should the conservative low-level and clipping heuristic thresholds be tuned
+  after collecting non-sensitive test samples?
 - What labeled evaluation data can be used later for similarity threshold
   calibration?
 
@@ -46,7 +60,11 @@ Phase 1: project foundation.
   without calibration on labeled data.
 - Short, noisy, or low-quality recordings may produce misleading results in
   later phases.
+- Technical validation only confirms container and signal-level constraints. It
+  does not confirm speech presence, speaker count, authenticity, or suitability
+  for speaker verification.
 
 ## Next Step
 
-Phase 2: implement audio file loading, metadata extraction, and validation.
+Open Phase 2 Pull Request for CTO review. Do not start Phase 3 until Phase 2 is
+reviewed and merged.

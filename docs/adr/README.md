@@ -16,3 +16,8 @@ Alternatives:
 Reason:
 Consequences:
 ```
+
+Current ADRs:
+
+- ADR-001: Project Structure And Phase 1 Foundation
+- ADR-002: WAV Loading And Technical Validation

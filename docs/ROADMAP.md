@@ -18,11 +18,15 @@ Goal: load local audio files and validate basic file properties.
 
 Completion criteria:
 
-- WAV files can be read safely;
-- invalid paths, unsupported formats, empty files, and unreadable files fail
-  with clear errors;
-- sample rate, duration, channel count, and basic metadata are returned;
-- tests cover valid and invalid audio inputs.
+- RIFF/WAVE PCM16 files can be read safely;
+- invalid paths, unsupported formats, empty files, unreadable files, and
+  corrupted files fail with stable error codes;
+- sample rate, duration, channel count, bit depth, peak, RMS, and total samples
+  are returned as technical metadata;
+- stereo and supported non-16 kHz files return warnings, not transforms;
+- technical validation is documented as separate from speaker-verification
+  suitability;
+- tests cover valid, invalid, and warning scenarios without real voice data.
 
 ## Phase 3: Audio Preprocessing
 
