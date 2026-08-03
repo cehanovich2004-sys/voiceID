@@ -1,6 +1,7 @@
 # ADR-005: Raw Cosine Similarity Boundary
 
-Status: Accepted for Phase 5A implementation, pending independent QA and merge.
+Status: Accepted. Phase 5A completed independent QA and CTO review and merged
+into `main` through PR #6.
 
 ## Decision
 
