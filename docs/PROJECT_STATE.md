@@ -2,9 +2,10 @@
 
 ## Current Phase
 
-Phase 2: WAV loading and technical validation.
+Phase 3: deterministic audio preprocessing.
 
-Implementation status: complete in feature branch, pending Pull Request review.
+Implementation status: in progress in feature branch, pending checks and Pull
+Request review.
 
 ## Completed In Phase 1
 
@@ -29,6 +30,18 @@ Implementation status: complete in feature branch, pending Pull Request review.
 - Added synthetic WAV tests for valid, invalid, and warning scenarios.
 - Added Phase 2 validation documentation and ADR-002.
 
+## Completed In Phase 3
+
+- Added deterministic preprocessing from Phase 2-valid PCM16 WAV input to
+  float32 mono 16000 Hz waveform output.
+- Added `numpy` and `scipy` runtime dependencies for array processing and
+  polyphase resampling.
+- Added typed preprocessing result models and application service
+  `preprocess_wav_file()`.
+- Added synthetic preprocessing tests for downmixing, resampling, DC offset
+  removal, safety clipping, deterministic output, and privacy guardrails.
+- Added Phase 3 preprocessing documentation and ADR-003.
+
 ## Assumptions
 
 - Python 3.11 is the safest Phase 1 runtime target for future ML dependency
@@ -40,6 +53,8 @@ Implementation status: complete in feature branch, pending Pull Request review.
 - The original project specification is retained as product context, while
   Phase 1 uses `src`-layout instead of the earlier draft `app/` layout.
 - No audio, ML, API, UI, or database logic belongs in Phase 1.
+- Phase 3 preprocessing accepts Phase 2-valid input, including files that are
+  valid with warnings. It does not decide speaker-verification suitability.
 
 ## Open Questions
 
@@ -49,6 +64,10 @@ Implementation status: complete in feature branch, pending Pull Request review.
   after collecting non-sensitive test samples?
 - What labeled evaluation data can be used later for similarity threshold
   calibration?
+- Should future ML backend requirements change the target preprocessing
+  contract beyond mono 16000 Hz float32?
+- Should Phase 4 keep waveform arrays in memory only, or introduce explicit
+  temporary storage with a separate privacy and retention decision?
 
 ## Known Risks
 
@@ -63,8 +82,11 @@ Implementation status: complete in feature branch, pending Pull Request review.
 - Technical validation only confirms container and signal-level constraints. It
   does not confirm speech presence, speaker count, authenticity, or suitability
   for speaker verification.
+- Deterministic preprocessing can make audio structurally compatible with a
+  future embedding backend, but it does not prove that enough usable speech is
+  present.
 
 ## Next Step
 
-Open Phase 2 Pull Request for CTO review. Do not start Phase 3 until Phase 2 is
+Open Phase 3 Pull Request for CTO review. Do not start Phase 4 until Phase 3 is
 reviewed and merged.

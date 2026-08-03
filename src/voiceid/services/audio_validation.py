@@ -17,6 +17,7 @@ from voiceid.audio.models import (
 from voiceid.audio.validation_policy import AudioValidationPolicy
 from voiceid.audio.wav_reader import (
     PCM_FORMAT_TAG,
+    PcmSignalStats,
     WavContainerError,
     WavDecodeError,
     WavFileNotReadableError,
@@ -120,16 +121,15 @@ def _validate_wav_file(
         )
 
     metadata = _metadata_from_header(header, active_policy)
-    errors.extend(_validate_header(header, active_policy, metadata))
-    if errors:
-        return build_validation_result(
-            file_name=file_name,
-            metadata=metadata,
-            warnings=warnings,
-            errors=errors,
-        )
+    header_result = validate_wav_header_snapshot(
+        file_name=file_name,
+        header=header,
+        policy=active_policy,
+    )
+    if not header_result.is_valid:
+        return header_result
 
-    warnings.extend(_structural_warnings(header, active_policy))
+    warnings.extend(header_result.warnings)
 
     try:
         signal_stats = decode_pcm16_signal_stats(
@@ -166,55 +166,11 @@ def _validate_wav_file(
             errors=errors,
         )
 
-    metadata = _metadata_with_signal_stats(
-        metadata=metadata,
-        peak_amplitude=signal_stats.peak_amplitude,
-        rms_level=signal_stats.rms_level,
-    )
-
-    if signal_stats.peak_amplitude == 0 or (
-        signal_stats.rms_level <= active_policy.silent_rms_threshold
-    ):
-        errors.append(
-            _error(
-                ValidationErrorCode.SILENT_AUDIO,
-                "The audio signal is silent or practically silent.",
-                field="rms_level",
-                measured_value=signal_stats.rms_level,
-                expected=f"> {active_policy.silent_rms_threshold}",
-            )
-        )
-    elif signal_stats.rms_level < active_policy.low_audio_rms_threshold:
-        warnings.append(
-            _warning(
-                ValidationWarningCode.LOW_AUDIO_LEVEL,
-                "The audio signal level is low.",
-                field="rms_level",
-                measured_value=signal_stats.rms_level,
-                expected=f">= {active_policy.low_audio_rms_threshold}",
-            )
-        )
-
-    if (
-        signal_stats.peak_amplitude >= active_policy.clipping_peak_threshold
-        or signal_stats.clipped_sample_fraction
-        >= active_policy.clipping_sample_fraction_threshold
-    ):
-        warnings.append(
-            _warning(
-                ValidationWarningCode.POSSIBLE_CLIPPING,
-                "The audio signal may contain clipped samples.",
-                field="peak_amplitude",
-                measured_value=signal_stats.peak_amplitude,
-                expected=f"< {active_policy.clipping_peak_threshold}",
-            )
-        )
-
-    return build_validation_result(
+    return validate_wav_signal_snapshot(
         file_name=file_name,
-        metadata=metadata,
-        warnings=warnings,
-        errors=errors,
+        header=header,
+        signal_stats=signal_stats,
+        policy=active_policy,
     )
 
 
@@ -251,6 +207,78 @@ def _validate_path(path: Path) -> ValidationIssue | None:
             "The file cannot be inspected safely.",
         )
     return None
+
+
+def validate_wav_header_snapshot(
+    *,
+    file_name: str,
+    header: WavHeader,
+    policy: AudioValidationPolicy | None = None,
+) -> AudioValidationResult:
+    """Apply Phase 2 header policy to already parsed WAV snapshot metadata."""
+
+    active_policy = policy or AudioValidationPolicy()
+    metadata = _metadata_from_header(header, active_policy)
+    errors = _validate_header(header, active_policy, metadata)
+    warnings: list[ValidationIssue] = []
+    if not errors:
+        warnings.extend(_structural_warnings(header, active_policy))
+
+    return build_validation_result(
+        file_name=file_name,
+        metadata=metadata,
+        warnings=warnings,
+        errors=errors,
+    )
+
+
+def validate_wav_signal_snapshot(
+    *,
+    file_name: str,
+    header: WavHeader,
+    signal_stats: PcmSignalStats,
+    policy: AudioValidationPolicy | None = None,
+) -> AudioValidationResult:
+    """Apply full Phase 2 policy to one parsed and decoded WAV snapshot."""
+
+    active_policy = policy or AudioValidationPolicy()
+    header_result = validate_wav_header_snapshot(
+        file_name=file_name,
+        header=header,
+        policy=active_policy,
+    )
+    if not header_result.is_valid:
+        return header_result
+    if header_result.metadata is None:
+        return build_validation_result(
+            file_name=file_name,
+            metadata=None,
+            warnings=[],
+            errors=[
+                _error(
+                    ValidationErrorCode.DECODE_ERROR,
+                    "The WAV file could not be decoded safely.",
+                )
+            ],
+        )
+
+    metadata = _metadata_with_signal_stats(
+        metadata=header_result.metadata,
+        peak_amplitude=signal_stats.peak_amplitude,
+        rms_level=signal_stats.rms_level,
+    )
+    warnings = list(header_result.warnings)
+    errors: list[ValidationIssue] = []
+    errors.extend(_signal_errors(signal_stats, active_policy))
+    if not errors:
+        warnings.extend(_signal_warnings(signal_stats, active_policy))
+
+    return build_validation_result(
+        file_name=file_name,
+        metadata=metadata,
+        warnings=warnings,
+        errors=errors,
+    )
 
 
 def _validate_extension(path: Path) -> ValidationIssue | None:
@@ -372,6 +400,59 @@ def _structural_warnings(
                 field="channels",
                 measured_value=header.channels,
                 expected=f"{policy.target_channel_count}",
+            )
+        )
+    return warnings
+
+
+def _signal_errors(
+    signal_stats: PcmSignalStats,
+    policy: AudioValidationPolicy,
+) -> list[ValidationIssue]:
+    errors: list[ValidationIssue] = []
+    if signal_stats.peak_amplitude == 0 or (
+        signal_stats.rms_level <= policy.silent_rms_threshold
+    ):
+        errors.append(
+            _error(
+                ValidationErrorCode.SILENT_AUDIO,
+                "The audio signal is silent or practically silent.",
+                field="rms_level",
+                measured_value=signal_stats.rms_level,
+                expected=f"> {policy.silent_rms_threshold}",
+            )
+        )
+    return errors
+
+
+def _signal_warnings(
+    signal_stats: PcmSignalStats,
+    policy: AudioValidationPolicy,
+) -> list[ValidationIssue]:
+    warnings: list[ValidationIssue] = []
+    if signal_stats.rms_level < policy.low_audio_rms_threshold:
+        warnings.append(
+            _warning(
+                ValidationWarningCode.LOW_AUDIO_LEVEL,
+                "The audio signal level is low.",
+                field="rms_level",
+                measured_value=signal_stats.rms_level,
+                expected=f">= {policy.low_audio_rms_threshold}",
+            )
+        )
+
+    if (
+        signal_stats.peak_amplitude >= policy.clipping_peak_threshold
+        or signal_stats.clipped_sample_fraction
+        >= policy.clipping_sample_fraction_threshold
+    ):
+        warnings.append(
+            _warning(
+                ValidationWarningCode.POSSIBLE_CLIPPING,
+                "The audio signal may contain clipped samples.",
+                field="peak_amplitude",
+                measured_value=signal_stats.peak_amplitude,
+                expected=f"< {policy.clipping_peak_threshold}",
             )
         )
     return warnings

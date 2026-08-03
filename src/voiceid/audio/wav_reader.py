@@ -7,6 +7,7 @@ import struct
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 PCM_FORMAT_TAG = 1
 IEEE_FLOAT_FORMAT_TAG = 3
@@ -77,90 +78,94 @@ def read_wav_header(path: Path) -> WavHeader:
     try:
         file_size = path.stat().st_size
         with path.open("rb") as wav_file:
-            riff_header = wav_file.read(_RIFF_HEADER_SIZE)
-            if len(riff_header) < _RIFF_HEADER_SIZE:
-                raise WavContainerError
+            return read_wav_header_from_file(wav_file, file_size=file_size)
+    except PermissionError as exc:
+        raise WavFileNotReadableError from exc
+    except OSError as exc:
+        raise WavDecodeError from exc
 
-            if riff_header[:4] != b"RIFF" or riff_header[8:12] != b"WAVE":
-                raise WavContainerError
 
-            riff_size = struct.unpack("<I", riff_header[4:8])[0]
-            declared_file_size = 8 + riff_size
-            if (
-                declared_file_size != file_size
-                or declared_file_size < _RIFF_HEADER_SIZE
-            ):
+def read_wav_header_from_file(wav_file: BinaryIO, *, file_size: int) -> WavHeader:
+    """Parse a RIFF/WAVE header from an already opened file snapshot."""
+
+    try:
+        wav_file.seek(0)
+        riff_header = wav_file.read(_RIFF_HEADER_SIZE)
+        if len(riff_header) < _RIFF_HEADER_SIZE:
+            raise WavContainerError
+
+        if riff_header[:4] != b"RIFF" or riff_header[8:12] != b"WAVE":
+            raise WavContainerError
+
+        riff_size = struct.unpack("<I", riff_header[4:8])[0]
+        declared_file_size = 8 + riff_size
+        if declared_file_size != file_size or declared_file_size < _RIFF_HEADER_SIZE:
+            raise WavDecodeError
+
+        fmt_fields: tuple[int, int, int, int, int, int] | None = None
+        data_size_bytes: int | None = None
+
+        while wav_file.tell() < declared_file_size:
+            if declared_file_size - wav_file.tell() < _CHUNK_HEADER_SIZE:
                 raise WavDecodeError
 
-            fmt_fields: tuple[int, int, int, int, int, int] | None = None
-            data_size_bytes: int | None = None
+            chunk_header = wav_file.read(_CHUNK_HEADER_SIZE)
+            if len(chunk_header) < _CHUNK_HEADER_SIZE:
+                raise WavDecodeError
 
-            while wav_file.tell() < declared_file_size:
-                if declared_file_size - wav_file.tell() < _CHUNK_HEADER_SIZE:
+            chunk_id = chunk_header[:4]
+            chunk_size = struct.unpack("<I", chunk_header[4:8])[0]
+            chunk_start = wav_file.tell()
+            chunk_end = chunk_start + chunk_size
+            padded_chunk_end = chunk_end + (chunk_size % 2)
+            if chunk_end > declared_file_size or padded_chunk_end > declared_file_size:
+                raise WavDecodeError
+
+            if chunk_id == b"fmt ":
+                if fmt_fields is not None:
                     raise WavDecodeError
-
-                chunk_header = wav_file.read(_CHUNK_HEADER_SIZE)
-                if len(chunk_header) < _CHUNK_HEADER_SIZE:
+                chunk_data = wav_file.read(chunk_size)
+                if len(chunk_data) != chunk_size:
                     raise WavDecodeError
-
-                chunk_id = chunk_header[:4]
-                chunk_size = struct.unpack("<I", chunk_header[4:8])[0]
-                chunk_start = wav_file.tell()
-                chunk_end = chunk_start + chunk_size
-                padded_chunk_end = chunk_end + (chunk_size % 2)
-                if (
-                    chunk_end > declared_file_size
-                    or padded_chunk_end > declared_file_size
-                ):
+                fmt_fields = _parse_fmt_chunk(chunk_data)
+            elif chunk_id == b"data":
+                if data_size_bytes is not None:
                     raise WavDecodeError
+                data_size_bytes = chunk_size
+                wav_file.seek(chunk_end)
+            else:
+                wav_file.seek(chunk_end)
 
-                if chunk_id == b"fmt ":
-                    if fmt_fields is not None:
-                        raise WavDecodeError
-                    chunk_data = wav_file.read(chunk_size)
-                    if len(chunk_data) != chunk_size:
-                        raise WavDecodeError
-                    fmt_fields = _parse_fmt_chunk(chunk_data)
-                elif chunk_id == b"data":
-                    if data_size_bytes is not None:
-                        raise WavDecodeError
-                    data_size_bytes = chunk_size
-                    wav_file.seek(chunk_end)
-                else:
-                    wav_file.seek(chunk_end)
+            wav_file.seek(padded_chunk_end)
 
-                wav_file.seek(padded_chunk_end)
+        if wav_file.tell() != declared_file_size:
+            raise WavDecodeError
 
-            if wav_file.tell() != declared_file_size:
-                raise WavDecodeError
+        if fmt_fields is None or data_size_bytes is None:
+            raise WavDecodeError
 
-            if fmt_fields is None or data_size_bytes is None:
-                raise WavDecodeError
-
-            format_tag, channels, sample_rate, byte_rate, block_align, bits = fmt_fields
-            if block_align <= 0 or data_size_bytes % block_align != 0:
-                raise WavDecodeError
-            if format_tag == PCM_FORMAT_TAG and bits == 16:
-                _validate_pcm16_header_consistency(
-                    channels=channels,
-                    sample_rate_hz=sample_rate,
-                    byte_rate=byte_rate,
-                    block_align=block_align,
-                    sample_width_bits=bits,
-                )
-
-            return WavHeader(
-                format_tag=format_tag,
+        format_tag, channels, sample_rate, byte_rate, block_align, bits = fmt_fields
+        if block_align <= 0 or data_size_bytes % block_align != 0:
+            raise WavDecodeError
+        if format_tag == PCM_FORMAT_TAG and bits == 16:
+            _validate_pcm16_header_consistency(
                 channels=channels,
                 sample_rate_hz=sample_rate,
                 byte_rate=byte_rate,
                 block_align=block_align,
                 sample_width_bits=bits,
-                data_size_bytes=data_size_bytes,
-                total_frames=data_size_bytes // block_align,
             )
-    except PermissionError as exc:
-        raise WavFileNotReadableError from exc
+
+        return WavHeader(
+            format_tag=format_tag,
+            channels=channels,
+            sample_rate_hz=sample_rate,
+            byte_rate=byte_rate,
+            block_align=block_align,
+            sample_width_bits=bits,
+            data_size_bytes=data_size_bytes,
+            total_frames=data_size_bytes // block_align,
+        )
     except OSError as exc:
         raise WavDecodeError from exc
 
@@ -175,60 +180,94 @@ def decode_pcm16_signal_stats(
 
     try:
         with wave.open(str(path), "rb") as wav_file:
-            _assert_wave_matches_header(wav_file, header)
-
-            scalar_count = 0
-            frames_read = 0
-            square_sum = 0.0
-            peak_amplitude = 0.0
-            clipped_samples = 0
-
-            while frames_read < header.total_frames:
-                frames_to_read = min(
-                    _READ_CHUNK_FRAMES,
-                    header.total_frames - frames_read,
-                )
-                chunk = wav_file.readframes(frames_to_read)
-                if not chunk:
-                    break
-                if len(chunk) % _PCM16_SAMPLE_WIDTH_BYTES != 0:
-                    raise WavDecodeError
-
-                value_count = len(chunk) // _PCM16_SAMPLE_WIDTH_BYTES
-                if value_count % header.channels != 0:
-                    raise WavDecodeError
-
-                frames_read += value_count // header.channels
-                scalar_count += value_count
-
-                for (sample,) in struct.iter_unpack("<h", chunk):
-                    normalized_sample = sample / PCM16_ABS_MAX
-                    abs_sample = abs(normalized_sample)
-                    square_sum += normalized_sample * normalized_sample
-                    peak_amplitude = max(peak_amplitude, abs_sample)
-                    if abs_sample >= clipping_sample_level_threshold:
-                        clipped_samples += 1
-
-            expected_scalar_count = header.total_frames * header.channels
-            if (
-                frames_read != header.total_frames
-                or scalar_count != expected_scalar_count
-            ):
-                raise WavDecodeError
-            if scalar_count == 0:
-                raise WavDecodeError
-
-            rms_level = math.sqrt(square_sum / scalar_count)
-            clipped_fraction = clipped_samples / scalar_count
-            return PcmSignalStats(
-                peak_amplitude=round(peak_amplitude, PUBLIC_FLOAT_DECIMALS),
-                rms_level=round(rms_level, PUBLIC_FLOAT_DECIMALS),
-                clipped_sample_fraction=round(clipped_fraction, PUBLIC_FLOAT_DECIMALS),
+            return decode_pcm16_signal_stats_from_wave_file(
+                wav_file,
+                header,
+                clipping_sample_level_threshold=clipping_sample_level_threshold,
             )
     except PermissionError as exc:
         raise WavFileNotReadableError from exc
     except (EOFError, OSError, struct.error, wave.Error) as exc:
         raise WavDecodeError from exc
+
+
+def decode_pcm16_signal_stats_from_file(
+    wav_file: BinaryIO,
+    header: WavHeader,
+    *,
+    clipping_sample_level_threshold: float,
+) -> PcmSignalStats:
+    """Calculate PCM16 signal stats from an already opened file snapshot."""
+
+    try:
+        wav_file.seek(0)
+        with wave.open(wav_file, "rb") as wave_reader:
+            return decode_pcm16_signal_stats_from_wave_file(
+                wave_reader,
+                header,
+                clipping_sample_level_threshold=clipping_sample_level_threshold,
+            )
+    except PermissionError as exc:
+        raise WavFileNotReadableError from exc
+    except (EOFError, OSError, struct.error, wave.Error) as exc:
+        raise WavDecodeError from exc
+
+
+def decode_pcm16_signal_stats_from_wave_file(
+    wav_file: wave.Wave_read,
+    header: WavHeader,
+    *,
+    clipping_sample_level_threshold: float,
+) -> PcmSignalStats:
+    """Calculate normalized PCM16 signal stats from an open wave reader."""
+
+    _assert_wave_matches_header(wav_file, header)
+
+    scalar_count = 0
+    frames_read = 0
+    square_sum = 0.0
+    peak_amplitude = 0.0
+    clipped_samples = 0
+
+    while frames_read < header.total_frames:
+        frames_to_read = min(
+            _READ_CHUNK_FRAMES,
+            header.total_frames - frames_read,
+        )
+        chunk = wav_file.readframes(frames_to_read)
+        if not chunk:
+            break
+        if len(chunk) % _PCM16_SAMPLE_WIDTH_BYTES != 0:
+            raise WavDecodeError
+
+        value_count = len(chunk) // _PCM16_SAMPLE_WIDTH_BYTES
+        if value_count % header.channels != 0:
+            raise WavDecodeError
+
+        frames_read += value_count // header.channels
+        scalar_count += value_count
+
+        for (sample,) in struct.iter_unpack("<h", chunk):
+            normalized_sample = sample / PCM16_ABS_MAX
+            abs_sample = abs(normalized_sample)
+            square_sum += normalized_sample * normalized_sample
+            peak_amplitude = max(peak_amplitude, abs_sample)
+            if abs_sample >= clipping_sample_level_threshold:
+                clipped_samples += 1
+
+    expected_scalar_count = header.total_frames * header.channels
+    if frames_read != header.total_frames or scalar_count != expected_scalar_count:
+        raise WavDecodeError
+    if scalar_count == 0:
+        raise WavDecodeError
+
+    rms_level = math.sqrt(square_sum / scalar_count)
+    clipped_fraction = clipped_samples / scalar_count
+    return PcmSignalStats(
+        peak_amplitude=round(peak_amplitude, PUBLIC_FLOAT_DECIMALS),
+        rms_level=round(rms_level, PUBLIC_FLOAT_DECIMALS),
+        clipped_sample_fraction=round(clipped_fraction, PUBLIC_FLOAT_DECIMALS),
+    )
 
 
 def calculate_duration_seconds(header: WavHeader) -> float | None:

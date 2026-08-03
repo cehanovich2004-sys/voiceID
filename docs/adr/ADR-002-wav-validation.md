@@ -1,6 +1,6 @@
 # ADR-002: WAV Loading And Technical Validation
 
-Status: Accepted for Phase 2 implementation, pending CTO review of PR.
+Status: Accepted and merged in Phase 2.
 
 ## Decision
 
