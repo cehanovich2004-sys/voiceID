@@ -1,7 +1,7 @@
 # Phase 5A: Safe Speaker Embedding Similarity
 
-Status: implemented in a feature branch, pending independent QA, CTO review,
-and merge.
+Status: completed after independent QA and CTO review and merged into `main`
+through PR #6.
 
 Phase 5A compares two compatible `SpeakerEmbeddingResult` objects with raw
 cosine similarity. It is a deterministic, core-only calculation: it does not

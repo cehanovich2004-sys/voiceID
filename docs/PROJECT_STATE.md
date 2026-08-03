@@ -2,11 +2,9 @@
 
 ## Current Phase
 
-Phase 5A: safe speaker embedding similarity.
-
-Implementation status: implemented in
-`feature/phase-5a-speaker-similarity`, pending independent QA, CTO review, and
-merge. Phase 5A must not be treated as completed before merge.
+No implementation phase is currently active. Phase 5A completed independent
+QA and CTO review and is merged into `main`. Phase 5B has not started and
+requires separate CTO approval.
 
 ## Completed Phases
 
@@ -17,8 +15,10 @@ merge. Phase 5A must not be treated as completed before merge.
 - Phase 4B added the optional local SpeechBrain ECAPA-TDNN embedding backend,
   typed privacy-safe contracts, offline cache handling, and fake/real-model
   tests.
+- Phase 5A added deterministic, privacy-safe raw cosine similarity for
+  compatible speaker embeddings without a biometric decision policy.
 
-## Phase 5A Implementation Under Review
+## Phase 5A Completed
 
 - Added a pure `compare_speaker_embeddings()` application API.
 - Added typed `VALID`/`INVALID` similarity contracts with one stable error.
@@ -59,5 +59,6 @@ merge. Phase 5A must not be treated as completed before merge.
 
 ## Next Step
 
-Open a Draft Pull Request for independent QA and CTO review. Do not start Phase
-5B and do not merge without separate CTO approval.
+No implementation phase is authorized. Phase 5B remains unstarted and requires
+separate CTO approval after its dataset, consent, privacy, evaluation, and
+architecture requirements are reviewed.

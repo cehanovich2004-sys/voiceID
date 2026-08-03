@@ -12,7 +12,8 @@ deferred.
 
 ## Current Status
 
-Status: Phase 5A implementation in a feature branch, pending QA and merge.
+Status: Phase 5A is complete and merged into `main`. Phase 5B has not started
+and requires separate CTO approval.
 
 Implemented:
 
