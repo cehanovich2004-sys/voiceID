@@ -61,6 +61,8 @@ Completion criteria:
 
 ## Phase 5A: Safe Speaker Embedding Similarity
 
+Status: Completed and merged into `main` through PR #6.
+
 Goal: compare compatible embeddings and return a raw cosine similarity score.
 
 Completion criteria:
@@ -73,6 +75,8 @@ Completion criteria:
 - no biometric threshold or verdict is introduced.
 
 ## Phase 5B: Experimental Calibration
+
+Status: Not started. Implementation requires separate CTO approval.
 
 Goal: evaluate score distributions on approved labeled data before considering
 any biometric decision policy.
