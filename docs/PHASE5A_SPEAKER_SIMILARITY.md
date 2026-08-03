@@ -22,7 +22,8 @@ The function accepts only two Phase 4B embedding results and returns a
 `VALID` contains:
 
 - `similarity`: a finite Python `float` in `[-1.0, 1.0]`;
-- safe comparison metadata;
+- fixed safe comparison metadata: metric, comparison version, embedding
+  dimension, and normalized policy;
 - no errors.
 
 `INVALID` contains:
@@ -69,6 +70,11 @@ The two results must match on:
 - backend name;
 - raw/normalized policy.
 
+Model identifier, model revision, and backend name are used only for internal
+compatibility checks. They are not copied into public similarity metadata,
+`repr()`, `str()`, or `to_dict()` because input metadata must be treated as
+untrusted at this boundary.
+
 Inference or recording device metadata is not compared. No automatic dtype,
 dimension, backend, revision, or normalization conversion is performed.
 
@@ -101,8 +107,9 @@ Unexpected ordinary exceptions and `MemoryError` become a sanitized
 
 Embeddings remain sensitive biometric templates. Phase 5A does not expose or
 store embedding values, previews, vector norms, waveforms, file paths, cache
-paths, access tokens, or raw exception details. `repr()`, `str()`, `to_dict()`,
-errors, and normal execution contain only the raw score and safe metadata.
+paths, access tokens, raw model metadata strings, or exception details.
+`repr()`, `str()`, `to_dict()`, errors, and normal execution contain only the
+raw score and fixed safe metadata.
 Inputs are not modified and remain read-only.
 
 ## Preprocessing Compatibility

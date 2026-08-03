@@ -137,7 +137,9 @@ def _validate_compatibility(
     candidate: EmbeddingMetadata,
 ) -> None:
     metadata_fields_are_valid = (
-        reference.input_sample_rate_hz == EXPECTED_SAMPLE_RATE_HZ
+        type(reference.input_sample_rate_hz) is int
+        and reference.input_sample_rate_hz == EXPECTED_SAMPLE_RATE_HZ
+        and type(candidate.input_sample_rate_hz) is int
         and candidate.input_sample_rate_hz == EXPECTED_SAMPLE_RATE_HZ
         and type(reference.model_identifier) is str
         and bool(reference.model_identifier)
@@ -186,8 +188,5 @@ def _build_metadata(source: EmbeddingMetadata) -> SpeakerSimilarityMetadata:
         metric=COSINE_SIMILARITY_METRIC,
         comparison_version=SIMILARITY_COMPARISON_VERSION,
         embedding_dimension=EMBEDDING_DIMENSION,
-        model_identifier=source.model_identifier,
-        model_revision=source.model_revision,
-        backend_name=source.backend_name,
         normalized=source.normalized,
     )

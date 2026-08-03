@@ -191,6 +191,9 @@ backend, raw/normalized policy, and 16000 Hz metadata. The calculation works in
 the core installation and does not load models, access the network, or persist
 embeddings.
 
+Model identifier, revision, and backend strings are used internally for
+compatibility but omitted from public similarity metadata and serialization.
+
 Similarity is a raw score, not probability, confidence, or an identity verdict.
 Phase 5A has no biometric threshold and does not return `MATCH`, `NO_MATCH`, or
 `UNCERTAIN`. Experimental calibration is deferred to Phase 5B and requires

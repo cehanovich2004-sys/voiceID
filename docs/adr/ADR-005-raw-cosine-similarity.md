@@ -13,6 +13,8 @@ pure deterministic cosine similarity function.
 - The final score is clipped to `[-1.0, 1.0]` only for floating-point overshoot.
 - Compatibility requires the same dimension, model identifier, pinned model
   revision, backend, normalized policy, and 16000 Hz input contract.
+- Model identifier, revision, and backend remain internal compatibility inputs
+  and are omitted from public similarity metadata.
 - The result exposes a raw score and safe metadata, never a biometric verdict.
 
 The public comparison function is independent of embedding backends, model
@@ -50,6 +52,8 @@ the Phase 4B embedding backend or Phase 5A contract.
 - `MemoryError` and unexpected ordinary exceptions are sanitized as
   `COMPARISON_ERROR`; process-control exceptions pass through.
 - Embeddings and vector norms are not serialized, logged, or persisted.
+- Untrusted model metadata strings are not copied to public similarity result
+  surfaces.
 - Recording/inference device differences do not alone make embeddings
   incompatible.
 

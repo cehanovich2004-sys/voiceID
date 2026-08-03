@@ -86,10 +86,6 @@ def test_similarity_result_rejects_contradictory_states(
         ({"comparison_version": "2"}, "version"),
         ({"embedding_dimension": 191}, "192"),
         ({"embedding_dimension": 192.0}, "192"),
-        ({"model_identifier": ""}, "identifier"),
-        ({"model_identifier": 123}, "identifier"),
-        ({"model_revision": ""}, "revision"),
-        ({"backend_name": ""}, "backend"),
         ({"normalized": 0}, "boolean"),
     ],
 )
@@ -138,9 +134,6 @@ def _metadata_values() -> dict[str, object]:
         "metric": COSINE_SIMILARITY_METRIC,
         "comparison_version": SIMILARITY_COMPARISON_VERSION,
         "embedding_dimension": 192,
-        "model_identifier": "model",
-        "model_revision": "revision",
-        "backend_name": "fake",
         "normalized": False,
     }
 

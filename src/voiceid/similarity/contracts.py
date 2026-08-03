@@ -85,9 +85,6 @@ class SpeakerSimilarityMetadata:
     metric: str
     comparison_version: str
     embedding_dimension: int
-    model_identifier: str
-    model_revision: str
-    backend_name: str
     normalized: bool
 
     def __post_init__(self) -> None:
@@ -105,12 +102,6 @@ class SpeakerSimilarityMetadata:
             or self.embedding_dimension != EMBEDDING_DIMENSION
         ):
             raise ValueError("Similarity embedding dimension must be 192.")
-        if type(self.model_identifier) is not str or not self.model_identifier:
-            raise ValueError("Similarity model identifier cannot be empty.")
-        if type(self.model_revision) is not str or not self.model_revision:
-            raise ValueError("Similarity model revision cannot be empty.")
-        if type(self.backend_name) is not str or not self.backend_name:
-            raise ValueError("Similarity backend name cannot be empty.")
         if type(self.normalized) is not bool:
             raise ValueError("Similarity normalized flag must be boolean.")
 
@@ -121,9 +112,6 @@ class SpeakerSimilarityMetadata:
             "metric": self.metric,
             "comparison_version": self.comparison_version,
             "embedding_dimension": self.embedding_dimension,
-            "model_identifier": self.model_identifier,
-            "model_revision": self.model_revision,
-            "backend_name": self.backend_name,
             "normalized": self.normalized,
         }
 

@@ -78,6 +78,12 @@ def test_valid_result_contains_fixed_safe_comparison_metadata() -> None:
     assert result.metadata.comparison_version == "1"
     assert result.metadata.embedding_dimension == 192
     assert result.metadata.normalized is False
+    assert result.metadata.to_dict() == {
+        "metric": "cosine_similarity",
+        "comparison_version": "1",
+        "embedding_dimension": 192,
+        "normalized": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -292,6 +298,29 @@ def test_non_target_reference_sample_rate_is_incompatible() -> None:
     _assert_invalid(result, SimilarityErrorCode.INCOMPATIBLE_EMBEDDINGS)
 
 
+@pytest.mark.parametrize(
+    "sample_rate",
+    [16000.0, np.int64(16000), True],
+)
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+def test_sample_rate_must_be_exact_python_int(
+    sample_rate: object,
+    argument: str,
+) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    object.__setattr__(
+        target,
+        "metadata",
+        replace(_metadata(), input_sample_rate_hz=sample_rate),
+    )
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INCOMPATIBLE_EMBEDDINGS)
+
+
 def test_different_inference_devices_remain_compatible() -> None:
     reference = _result(_basis(0), device="cpu")
     candidate = _result(_basis(0), device="other-device")
@@ -408,6 +437,41 @@ def test_safe_result_surfaces_exclude_inputs_and_private_metadata() -> None:
         assert "TOKEN_CANARY" not in surface
         assert "array(" not in surface
         assert "embedding=[" not in surface.lower()
+
+
+@pytest.mark.parametrize(
+    ("field", "canary"),
+    [
+        ("model_identifier", "/Users/private/TOKEN_MODEL_CANARY"),
+        ("model_revision", "SECRET_REVISION_CANARY"),
+        ("backend_name", "TOKEN_BACKEND_CANARY"),
+    ],
+)
+def test_untrusted_compatible_model_metadata_is_not_public(
+    field: str,
+    canary: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metadata = replace(_metadata(), **{field: canary})
+    reference = _tamper(_result(_basis(0)), metadata=metadata)
+    candidate = _tamper(_result(_basis(0)), metadata=metadata)
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    assert result.status == SimilarityStatus.VALID
+    assert result.errors == ()
+    surfaces = (
+        repr(result),
+        str(result),
+        str(result.to_dict()),
+        str(result.errors),
+        caplog.text,
+    )
+    assert all(canary not in surface for surface in surfaces)
+    assert result.metadata is not None
+    assert "model_identifier" not in result.metadata.to_dict()
+    assert "model_revision" not in result.metadata.to_dict()
+    assert "backend_name" not in result.metadata.to_dict()
 
 
 def _metadata(*, device: str = "cpu") -> EmbeddingMetadata:
