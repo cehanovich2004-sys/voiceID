@@ -34,10 +34,15 @@ Goal: prepare audio for future embedding extraction.
 
 Completion criteria:
 
-- mono conversion is defined;
-- target sample rate is selected;
-- normalization behavior is implemented and tested;
-- silence trimming or VAD strategy is documented before implementation.
+- Phase 2-valid PCM16 WAV files are decoded deterministically;
+- PCM16 samples are converted to float32 with `sample / 32768.0`;
+- stereo input is downmixed with arithmetic mean and mono input is unchanged;
+- DC offset removal is implemented and tested;
+- supported source rates are resampled to 16000 Hz with `resample_poly`;
+- safety clipping is documented as an invariant guard, not normalization;
+- result metadata and privacy constraints are documented and tested;
+- VAD, silence trimming, denoising, embeddings, and scoring remain out of
+  scope.
 
 ## Phase 4: Speaker Embeddings
 

@@ -6,13 +6,13 @@ The product goal is to answer one question:
 
 > Do two audio recordings belong to the same person?
 
-Phase 2 adds local WAV loading and technical validation for the future MVP audio
+Phase 3 adds deterministic audio preprocessing for the future MVP audio
 pipeline. Voice embeddings, similarity scoring, API endpoints, and user
 interfaces are intentionally deferred to later phases.
 
 ## Current Status
 
-Status: Phase 2, WAV loading and technical validation.
+Status: Phase 3, deterministic audio preprocessing.
 
 Implemented:
 
@@ -22,14 +22,14 @@ Implemented:
 - typed WAV validation contract;
 - local RIFF/WAVE PCM16 metadata validation;
 - deterministic warning and error codes;
+- deterministic PCM16 WAV preprocessing to in-memory float32 mono 16000 Hz;
 - smoke tests;
 - linting, formatting, type checking, and CI setup;
-- documentation, ADR-001, and ADR-002.
+- documentation, ADR-001, ADR-002, and ADR-003.
 
 Not implemented yet:
 
 - ML models;
-- audio preprocessing and transforms;
 - speaker embeddings;
 - similarity engine;
 - API;
@@ -88,6 +88,31 @@ Technical validation does not guarantee suitability for speaker verification.
 The result never exposes the canonical or absolute local path; only a safe
 filename is returned.
 
+## Audio Preprocessing
+
+Preprocess a Phase 2-valid local WAV file through the application service:
+
+```python
+from voiceid.services import preprocess_wav_file
+
+result = preprocess_wav_file("sample.wav")
+if result.is_valid:
+    waveform = result.waveform
+    metadata = result.metadata
+```
+
+Phase 3 converts valid PCM16 WAV input to an in-memory `numpy.ndarray` with
+`dtype=float32`, mono shape, sample rate 16000 Hz, finite values, and range
+`[-1.0, 1.0]`.
+
+The pipeline is deterministic: PCM16 decode, `sample / 32768.0`, stereo
+arithmetic mean downmix, DC offset removal, `scipy.signal.resample_poly`
+resampling when needed, and safety clipping. Safety clipping is a final
+invariant guard, not audio normalization.
+
+The public result does not expose absolute paths or waveform values in
+`repr()`, `to_dict()`, normal logs, or user-facing errors.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
@@ -115,20 +140,24 @@ voiceID/
 │       ├── audio/
 │       │   ├── __init__.py
 │       │   ├── models.py
+│       │   ├── preprocessing.py
 │       │   ├── validation_policy.py
 │       │   └── wav_reader.py
 │       ├── services/
 │       │   ├── __init__.py
+│       │   ├── audio_preprocessing.py
 │       │   └── audio_validation.py
 │       ├── config.py
 │       ├── logging_config.py
 │       └── py.typed
 ├── tests/
 │   ├── __init__.py
+│   ├── test_audio_preprocessing.py
 │   ├── test_smoke.py
 │   └── test_wav_validation.py
 ├── docs/
 │   ├── ML_PHASE1_AUDIO_AND_BASELINE_RECOMMENDATIONS.md
+│   ├── PHASE3_AUDIO_PREPROCESSING.md
 │   ├── PHASE2_WAV_VALIDATION.md
 │   ├── VOICEID_PROJECT_SPEC.md
 │   ├── ROADMAP.md
@@ -136,7 +165,8 @@ voiceID/
 │   └── adr/
 │       ├── README.md
 │       ├── ADR-001-project-structure.md
-│       └── ADR-002-wav-validation.md
+│       ├── ADR-002-wav-validation.md
+│       └── ADR-003-deterministic-audio-preprocessing.md
 ├── .github/
 │   └── workflows/
 │       └── ci.yml

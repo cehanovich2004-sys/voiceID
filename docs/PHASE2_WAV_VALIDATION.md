@@ -1,6 +1,6 @@
 # Phase 2: WAV Loading And Technical Validation
 
-Status: implemented in feature branch, pending CTO review.
+Status: accepted and merged in Phase 2.
 
 Phase 2 validates local WAV files against the technical input contract for the
 MVP audio pipeline. Technical validation does not guarantee suitability for

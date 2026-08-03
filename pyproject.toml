@@ -18,7 +18,10 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+  "numpy>=1.26,<3",
+  "scipy>=1.11,<2",
+]
 
 [project.optional-dependencies]
 dev = [
