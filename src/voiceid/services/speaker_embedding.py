@@ -72,17 +72,24 @@ class SpeakerEmbeddingService:
         self,
         preprocessed_audio: PreprocessedAudioResult,
     ) -> EmbeddingVector:
+        if not isinstance(preprocessed_audio, PreprocessedAudioResult):
+            raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
         if (
             preprocessed_audio.status != PreprocessingStatus.VALID
             or not preprocessed_audio.is_valid
+            or preprocessed_audio.errors != ()
             or preprocessed_audio.waveform is None
             or preprocessed_audio.metadata is None
         ):
             raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
 
         metadata = preprocessed_audio.metadata
+        if metadata.output_channels != 1:
+            raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
         if metadata.output_sample_rate_hz != self._policy.expected_sample_rate_hz:
             raise _EmbeddingInputError(EmbeddingErrorCode.UNSUPPORTED_SAMPLE_RATE)
+        if metadata.source_sample_rate_hz <= 0 or metadata.source_channels <= 0:
+            raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
 
         waveform = preprocessed_audio.waveform
         if waveform.dtype != np.float32:
@@ -91,6 +98,10 @@ class SpeakerEmbeddingService:
             raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
         if waveform.size == 0:
             raise _EmbeddingInputError(EmbeddingErrorCode.EMPTY_WAVEFORM)
+        if metadata.output_samples <= 0 or metadata.output_duration_seconds <= 0:
+            raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
+        if metadata.source_duration_seconds <= 0:
+            raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
         if int(metadata.output_samples) != int(waveform.shape[0]):
             raise _EmbeddingInputError(EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO)
 

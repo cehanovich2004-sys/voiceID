@@ -131,6 +131,12 @@ def test_invalid_phase3_result_does_not_call_backend() -> None:
         ("two_dimensional_waveform", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
         ("float64_waveform", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
         ("metadata_sample_mismatch", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("valid_status_with_errors", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("stereo_output_metadata", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("zero_output_duration", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("zero_source_duration", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("zero_source_sample_rate", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
+        ("zero_source_channels", EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO),
     ],
 )
 def test_input_validation_rejects_invalid_phase3_contract(
@@ -143,6 +149,17 @@ def test_input_validation_rejects_invalid_phase3_contract(
     result = _service(backend).embed(audio)
 
     assert _code(result) == expected
+    assert result.embedding is None
+    assert result.metadata is None
+    assert backend.calls == 0
+
+
+def test_input_validation_rejects_wrong_object_type_without_backend_call() -> None:
+    backend = FakeBackend()
+
+    result = _service(backend).embed(object())  # type: ignore[arg-type]
+
+    assert _code(result) == EmbeddingErrorCode.INVALID_PREPROCESSED_AUDIO
     assert result.embedding is None
     assert result.metadata is None
     assert backend.calls == 0
@@ -370,16 +387,25 @@ def _valid_audio_result(
 
 def _metadata(
     *,
+    source_sample_rate_hz: int = 16000,
+    source_channels: int = 1,
+    source_duration_seconds: float | None = None,
     output_sample_rate_hz: int = 16000,
+    output_channels: int = 1,
     output_samples: int = 16000,
     output_duration_seconds: float = 1.0,
 ) -> PreprocessedAudioMetadata:
+    active_source_duration = (
+        output_duration_seconds
+        if source_duration_seconds is None
+        else source_duration_seconds
+    )
     return PreprocessedAudioMetadata(
-        source_sample_rate_hz=16000,
-        source_channels=1,
-        source_duration_seconds=output_duration_seconds,
+        source_sample_rate_hz=source_sample_rate_hz,
+        source_channels=source_channels,
+        source_duration_seconds=active_source_duration,
         output_sample_rate_hz=output_sample_rate_hz,
-        output_channels=1,
+        output_channels=output_channels,
         output_samples=output_samples,
         output_duration_seconds=output_duration_seconds,
         downmixed_to_mono=False,
@@ -433,6 +459,28 @@ def _invalid_audio_case(case_name: str) -> PreprocessedAudioResult:
         "metadata_sample_mismatch": _valid_audio_result(
             waveform=np.full(16000, 0.1, dtype=np.float32),
             metadata=_metadata(output_samples=15999),
+        ),
+        "valid_status_with_errors": PreprocessedAudioResult(
+            status=PreprocessingStatus.VALID,
+            file_name="safe.wav",
+            waveform=_sine_wave(),
+            metadata=_metadata(),
+            errors=(PreprocessingIssue(code="STALE_ERROR", message="safe"),),
+        ),
+        "stereo_output_metadata": _valid_audio_result(
+            metadata=_metadata(output_channels=2),
+        ),
+        "zero_output_duration": _valid_audio_result(
+            metadata=_metadata(output_duration_seconds=0.0),
+        ),
+        "zero_source_duration": _valid_audio_result(
+            metadata=_metadata(source_duration_seconds=0.0),
+        ),
+        "zero_source_sample_rate": _valid_audio_result(
+            metadata=_metadata(source_sample_rate_hz=0),
+        ),
+        "zero_source_channels": _valid_audio_result(
+            metadata=_metadata(source_channels=0),
         ),
     }
     if case_name not in cases:

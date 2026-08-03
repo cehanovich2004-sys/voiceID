@@ -8,7 +8,10 @@ from enum import StrEnum
 import numpy as np
 import numpy.typing as npt
 
+from voiceid.embeddings.policy import SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION
+
 EmbeddingVector = npt.NDArray[np.float32]
+EMBEDDING_DIMENSION = SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION
 
 
 class EmbeddingStatus(StrEnum):
@@ -100,11 +103,12 @@ class SpeakerEmbeddingResult:
         """Enforce the public result invariants at construction time."""
 
         if self.status == EmbeddingStatus.VALID:
-            _validate_valid_result(
+            embedding = _validate_valid_result(
                 embedding=self.embedding,
                 metadata=self.metadata,
                 errors=self.errors,
             )
+            object.__setattr__(self, "embedding", embedding)
             return
 
         _validate_invalid_result(
@@ -164,7 +168,7 @@ def _validate_valid_result(
     embedding: EmbeddingVector | None,
     metadata: EmbeddingMetadata | None,
     errors: tuple[EmbeddingIssue, ...],
-) -> None:
+) -> EmbeddingVector:
     if embedding is None:
         raise ValueError("VALID embedding result requires an embedding.")
     if metadata is None:
@@ -177,10 +181,15 @@ def _validate_valid_result(
         raise ValueError("VALID embedding result requires float32 embedding dtype.")
     if embedding.ndim != 1:
         raise ValueError("VALID embedding result requires a one-dimensional embedding.")
-    if embedding.shape != (metadata.embedding_dimension,):
-        raise ValueError("VALID embedding result shape must match metadata dimension.")
+    if embedding.shape != (EMBEDDING_DIMENSION,):
+        raise ValueError("VALID embedding result requires shape (192,).")
+    if metadata.embedding_dimension != EMBEDDING_DIMENSION:
+        raise ValueError("VALID embedding metadata dimension must be 192.")
     if not np.all(np.isfinite(embedding)):
         raise ValueError("VALID embedding result requires finite embedding values.")
+    copied = embedding.copy()
+    copied.setflags(write=False)
+    return copied
 
 
 def _validate_invalid_result(
@@ -193,5 +202,5 @@ def _validate_invalid_result(
         raise ValueError("INVALID embedding result cannot contain an embedding.")
     if metadata is not None:
         raise ValueError("INVALID embedding result cannot contain metadata.")
-    if not errors:
-        raise ValueError("INVALID embedding result requires at least one error.")
+    if len(errors) != 1:
+        raise ValueError("INVALID embedding result requires exactly one error.")
