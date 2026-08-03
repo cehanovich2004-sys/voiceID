@@ -7,7 +7,7 @@ import wave
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import BinaryIO, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -196,24 +196,47 @@ def decode_pcm16_to_float32(path: Path, header: WavHeader) -> Float32Waveform:
 
     try:
         with wave.open(str(path), "rb") as wav_file:
-            _assert_wave_matches_header(wav_file, header)
-            frame_bytes = wav_file.readframes(header.total_frames)
-
-        expected_bytes = header.total_frames * header.channels * 2
-        if len(frame_bytes) != expected_bytes:
-            raise WavDecodeError
-
-        pcm16 = np.frombuffer(frame_bytes, dtype="<i2")
-        if pcm16.size != header.total_frames * header.channels:
-            raise WavDecodeError
-
-        normalized = pcm16.astype(np.float32) / np.float32(PCM16_ABS_MAX)
-        if header.channels == TARGET_PREPROCESSING_CHANNELS:
-            return normalized.copy()
-
-        return normalized.reshape(header.total_frames, header.channels).copy()
+            return decode_pcm16_to_float32_from_wave_file(wav_file, header)
     except (EOFError, OSError, ValueError, wave.Error) as exc:
         raise WavDecodeError from exc
+
+
+def decode_pcm16_to_float32_from_file(
+    wav_file: BinaryIO,
+    header: WavHeader,
+) -> Float32Waveform:
+    """Decode PCM16 from an already opened WAV snapshot."""
+
+    try:
+        wav_file.seek(0)
+        with wave.open(wav_file, "rb") as wave_reader:
+            return decode_pcm16_to_float32_from_wave_file(wave_reader, header)
+    except (EOFError, OSError, ValueError, wave.Error) as exc:
+        raise WavDecodeError from exc
+
+
+def decode_pcm16_to_float32_from_wave_file(
+    wav_file: wave.Wave_read,
+    header: WavHeader,
+) -> Float32Waveform:
+    """Decode PCM16 from an open wave reader into normalized float32 frames."""
+
+    _assert_wave_matches_header(wav_file, header)
+    frame_bytes = wav_file.readframes(header.total_frames)
+
+    expected_bytes = header.total_frames * header.channels * 2
+    if len(frame_bytes) != expected_bytes:
+        raise WavDecodeError
+
+    pcm16 = np.frombuffer(frame_bytes, dtype="<i2")
+    if pcm16.size != header.total_frames * header.channels:
+        raise WavDecodeError
+
+    normalized = pcm16.astype(np.float32) / np.float32(PCM16_ABS_MAX)
+    if header.channels == TARGET_PREPROCESSING_CHANNELS:
+        return normalized.copy()
+
+    return normalized.reshape(header.total_frames, header.channels).copy()
 
 
 def preprocess_validated_waveform(

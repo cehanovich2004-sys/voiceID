@@ -20,6 +20,7 @@ from voiceid.audio.preprocessing import (
     PreprocessingErrorCode,
     PreprocessingStatus,
 )
+from voiceid.audio.validation_policy import AudioValidationPolicy
 from voiceid.services import preprocess_wav_file
 
 FloatArray = npt.NDArray[np.float32]
@@ -111,6 +112,34 @@ def test_stereo_antiphase_channels_cancel_after_downmix(tmp_path: Path) -> None:
     result = preprocess_wav_file(audio_path)
 
     waveform = _valid_waveform(result)
+    assert np.max(np.abs(waveform)) <= 1e-6
+
+
+def test_valid_antiphase_stereo_can_return_zero_waveform_by_contract(
+    tmp_path: Path,
+) -> None:
+    source = _sine_wave(sample_rate_hz=16000, frequency_hz=440, amplitude=0.4)
+    audio_path = _write_waveform(
+        tmp_path / "antiphase-contract.wav", _stereo(source, -source), 16000
+    )
+
+    result = preprocess_wav_file(audio_path)
+
+    waveform = _valid_waveform(result)
+    assert _valid_metadata(result).downmixed_to_mono is True
+    assert np.max(np.abs(waveform)) <= 1e-6
+
+
+def test_valid_constant_signal_can_return_zero_waveform_after_dc_removal(
+    tmp_path: Path,
+) -> None:
+    source = np.full(16000, 4 / 32768, dtype=np.float32)
+    audio_path = _write_waveform(tmp_path / "constant-valid.wav", source, 16000)
+
+    result = preprocess_wav_file(audio_path)
+
+    waveform = _valid_waveform(result)
+    assert _valid_metadata(result).dc_offset_removed is True
     assert np.max(np.abs(waveform)) <= 1e-6
 
 
@@ -362,7 +391,7 @@ def test_unexpected_exception_is_sanitized(
         raise RuntimeError(msg)
 
     monkeypatch.setattr(
-        "voiceid.services.audio_preprocessing.decode_pcm16_to_float32",
+        "voiceid.services.audio_preprocessing.decode_pcm16_to_float32_from_file",
         raise_unexpected_error,
     )
 
@@ -390,7 +419,7 @@ def test_base_exceptions_are_not_sanitized(
         raise exc_type
 
     monkeypatch.setattr(
-        "voiceid.services.audio_preprocessing.decode_pcm16_to_float32",
+        "voiceid.services.audio_preprocessing.decode_pcm16_to_float32_from_file",
         raise_base_exception,
     )
 
@@ -411,6 +440,203 @@ def test_public_dict_contract_is_stable(tmp_path: Path) -> None:
         "metadata": _valid_metadata(result).to_dict(),
         "errors": [],
     }
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"sample_rate_hz": 16000, "channels": 1, "duration_seconds": 0.5},
+        {"sample_rate_hz": 16000, "channels": 1, "duration_seconds": 61.0},
+        {"sample_rate_hz": 48000, "channels": 2, "duration_seconds": 1.25},
+    ],
+)
+def test_replacement_after_snapshot_validation_cannot_mix_metadata_and_waveform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: dict[str, int | float],
+) -> None:
+    audio_path = _write_waveform(
+        tmp_path / "race.wav",
+        _sine_wave(sample_rate_hz=16000, frequency_hz=440, amplitude=0.35),
+        16000,
+    )
+    replacement_path = tmp_path / "replacement.wav"
+    _write_replacement_waveform(replacement_path, replacement)
+    original_validate = _service_function("validate_wav_signal_snapshot")
+
+    def replace_after_validation(*args: object, **kwargs: object) -> object:
+        result = original_validate(*args, **kwargs)
+        replacement_path.replace(audio_path)
+        return result
+
+    monkeypatch.setattr(
+        "voiceid.services.audio_preprocessing.validate_wav_signal_snapshot",
+        replace_after_validation,
+    )
+
+    result = preprocess_wav_file(audio_path)
+
+    metadata = _valid_metadata(result)
+    assert _valid_waveform(result).shape == (16000,)
+    _assert_metadata_matches_original_snapshot(metadata)
+    _assert_metadata_is_internally_consistent(metadata)
+
+
+def test_replacement_before_header_read_still_uses_open_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_path = _write_waveform(
+        tmp_path / "header-race.wav",
+        _sine_wave(sample_rate_hz=16000, frequency_hz=440, amplitude=0.35),
+        16000,
+    )
+    replacement_path = _write_waveform(
+        tmp_path / "header-race-replacement.wav",
+        _sine_wave(
+            sample_rate_hz=48000,
+            frequency_hz=440,
+            amplitude=0.35,
+            duration_seconds=1.25,
+        ),
+        48000,
+    )
+    original_read_header = _service_function("read_wav_header_from_file")
+
+    def replace_before_header(*args: object, **kwargs: object) -> object:
+        replacement_path.replace(audio_path)
+        return original_read_header(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "voiceid.services.audio_preprocessing.read_wav_header_from_file",
+        replace_before_header,
+    )
+
+    result = preprocess_wav_file(audio_path)
+
+    metadata = _valid_metadata(result)
+    _assert_metadata_matches_original_snapshot(metadata)
+    _assert_metadata_is_internally_consistent(metadata)
+
+
+def test_replacement_before_decode_still_uses_open_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_path = _write_waveform(
+        tmp_path / "decode-race.wav",
+        _sine_wave(sample_rate_hz=16000, frequency_hz=440, amplitude=0.35),
+        16000,
+    )
+    replacement_path = _write_waveform(
+        tmp_path / "decode-race-replacement.wav",
+        _sine_wave(
+            sample_rate_hz=16000,
+            frequency_hz=440,
+            amplitude=0.35,
+            duration_seconds=61.0,
+        ),
+        16000,
+    )
+    original_decode = _service_function("decode_pcm16_to_float32_from_file")
+
+    def replace_before_decode(*args: object, **kwargs: object) -> object:
+        replacement_path.replace(audio_path)
+        return original_decode(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "voiceid.services.audio_preprocessing.decode_pcm16_to_float32_from_file",
+        replace_before_decode,
+    )
+
+    result = preprocess_wav_file(audio_path)
+
+    metadata = _valid_metadata(result)
+    assert _valid_waveform(result).shape == (16000,)
+    _assert_metadata_matches_original_snapshot(metadata)
+    _assert_metadata_is_internally_consistent(metadata)
+
+
+@pytest.mark.parametrize("duration_seconds", [0.5, 61.0])
+def test_actual_snapshot_policy_violation_is_invalid_without_partial_result(
+    tmp_path: Path,
+    duration_seconds: float,
+) -> None:
+    source = _sine_wave(
+        sample_rate_hz=16000,
+        frequency_hz=440,
+        amplitude=0.35,
+        duration_seconds=duration_seconds,
+    )
+    audio_path = _write_waveform(tmp_path / "policy-violation.wav", source, 16000)
+
+    result = preprocess_wav_file(audio_path)
+
+    _assert_invalid_without_partial_result(result, PreprocessingErrorCode.INVALID_INPUT)
+
+
+def test_custom_policy_applies_to_actual_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = _sine_wave(
+        sample_rate_hz=16000,
+        frequency_hz=440,
+        amplitude=0.35,
+        duration_seconds=1.25,
+    )
+    audio_path = _write_waveform(tmp_path / "custom-policy.wav", source, 16000)
+
+    result = preprocess_wav_file(
+        audio_path,
+        policy=AudioValidationPolicy(max_duration_seconds=1.0),
+    )
+
+    _assert_invalid_without_partial_result(result, PreprocessingErrorCode.INVALID_INPUT)
+
+
+def test_truncated_actual_snapshot_returns_controlled_decode_error_without_leaks(
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "truncated.wav"
+    audio_path.write_bytes(b"RIFF\x20\x00\x00\x00WAVEfmt ")
+
+    result = preprocess_wav_file(audio_path)
+    public_text = f"{result!r} {result.to_dict()!r}"
+
+    _assert_invalid_without_partial_result(result, PreprocessingErrorCode.DECODE_ERROR)
+    assert str(audio_path.resolve()) not in public_text
+    assert "array(" not in public_text
+    assert "waveform" not in repr(result)
+
+
+def test_replacement_with_truncated_file_after_validation_does_not_crash_or_mix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_path = _write_waveform(
+        tmp_path / "valid-then-truncated.wav",
+        _sine_wave(sample_rate_hz=16000, frequency_hz=440, amplitude=0.35),
+        16000,
+    )
+    truncated_path = tmp_path / "truncated-replacement.wav"
+    truncated_path.write_bytes(b"RIFF\x20\x00\x00\x00WAVEfmt ")
+    original_validate = _service_function("validate_wav_signal_snapshot")
+
+    def replace_after_validation(*args: object, **kwargs: object) -> object:
+        result = original_validate(*args, **kwargs)
+        truncated_path.replace(audio_path)
+        return result
+
+    monkeypatch.setattr(
+        "voiceid.services.audio_preprocessing.validate_wav_signal_snapshot",
+        replace_after_validation,
+    )
+
+    result = preprocess_wav_file(audio_path)
+
+    metadata = _valid_metadata(result)
+    _assert_metadata_matches_original_snapshot(metadata)
+    _assert_metadata_is_internally_consistent(metadata)
 
 
 def _valid_waveform(result: PreprocessedAudioResult) -> Float32Waveform:
@@ -435,6 +661,33 @@ def _assert_invalid_without_partial_result(
     assert result.waveform is None
     assert result.metadata is None
     assert [error.code for error in result.errors] == [code.value]
+
+
+def _assert_metadata_matches_original_snapshot(
+    metadata: PreprocessedAudioMetadata,
+) -> None:
+    assert metadata.source_sample_rate_hz == 16000
+    assert metadata.source_channels == 1
+    assert metadata.source_duration_seconds == 1.0
+    assert metadata.output_samples == 16000
+    assert metadata.output_duration_seconds == 1.0
+
+
+def _assert_metadata_is_internally_consistent(
+    metadata: PreprocessedAudioMetadata,
+) -> None:
+    assert metadata.output_sample_rate_hz == TARGET_PREPROCESSING_SAMPLE_RATE_HZ
+    assert metadata.output_channels == 1
+    assert metadata.output_duration_seconds == round(
+        metadata.output_samples / TARGET_PREPROCESSING_SAMPLE_RATE_HZ,
+        6,
+    )
+
+
+def _service_function(name: str) -> object:
+    import voiceid.services.audio_preprocessing as audio_preprocessing
+
+    return getattr(audio_preprocessing, name)
 
 
 def _sine_wave(
@@ -471,6 +724,24 @@ def _write_waveform(path: Path, waveform: FloatArray, sample_rate_hz: int) -> Pa
         wav_file.setframerate(sample_rate_hz)
         wav_file.writeframes(pcm.tobytes())
     return path
+
+
+def _write_replacement_waveform(
+    path: Path,
+    replacement: dict[str, int | float],
+) -> Path:
+    sample_rate_hz = int(replacement["sample_rate_hz"])
+    channels = int(replacement["channels"])
+    duration_seconds = float(replacement["duration_seconds"])
+    source = _sine_wave(
+        sample_rate_hz=sample_rate_hz,
+        frequency_hz=440,
+        amplitude=0.35,
+        duration_seconds=duration_seconds,
+    )
+    if channels == 2:
+        source = _stereo(source, source)
+    return _write_waveform(path, source, sample_rate_hz)
 
 
 def _writer_decoded_float(waveform: FloatArray) -> FloatArray:

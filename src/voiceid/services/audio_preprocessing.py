@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from voiceid.audio.preprocessing import (
@@ -9,7 +10,7 @@ from voiceid.audio.preprocessing import (
     PreprocessingErrorCode,
     build_invalid_preprocessing_result,
     build_preprocessed_audio_result,
-    decode_pcm16_to_float32,
+    decode_pcm16_to_float32_from_file,
     preprocess_validated_waveform,
 )
 from voiceid.audio.validation_policy import AudioValidationPolicy
@@ -17,9 +18,13 @@ from voiceid.audio.wav_reader import (
     WavContainerError,
     WavDecodeError,
     WavFileNotReadableError,
-    read_wav_header,
+    decode_pcm16_signal_stats_from_file,
+    read_wav_header_from_file,
 )
-from voiceid.services.audio_validation import validate_wav_file
+from voiceid.services.audio_validation import (
+    validate_wav_header_snapshot,
+    validate_wav_signal_snapshot,
+)
 
 
 def preprocess_wav_file(
@@ -41,18 +46,41 @@ def _preprocess_wav_file(
     policy: AudioValidationPolicy | None = None,
 ) -> PreprocessedAudioResult:
     path = Path(file_path)
-    validation_result = validate_wav_file(path, policy=policy)
-    file_name = validation_result.file_name
-    if not validation_result.is_valid:
-        return build_invalid_preprocessing_result(
-            file_name=file_name,
-            code=PreprocessingErrorCode.INVALID_INPUT,
-            message="The WAV file failed Phase 2 technical validation.",
-        )
+    file_name = _safe_file_name_from_input(path)
+    active_policy = policy or AudioValidationPolicy()
+    if path.suffix.lower() != ".wav":
+        return _invalid_input_result(file_name)
 
     try:
-        header = read_wav_header(path)
-        decoded = decode_pcm16_to_float32(path, header)
+        with path.open("rb") as audio_file:
+            file_size = os.fstat(audio_file.fileno()).st_size
+            header = read_wav_header_from_file(audio_file, file_size=file_size)
+            header_validation = validate_wav_header_snapshot(
+                file_name=file_name,
+                header=header,
+                policy=active_policy,
+            )
+            if not header_validation.is_valid:
+                return _invalid_input_result(file_name)
+
+            signal_stats = decode_pcm16_signal_stats_from_file(
+                audio_file,
+                header,
+                clipping_sample_level_threshold=(
+                    active_policy.clipping_sample_level_threshold
+                ),
+            )
+            validation_result = validate_wav_signal_snapshot(
+                file_name=file_name,
+                header=header,
+                signal_stats=signal_stats,
+                policy=active_policy,
+            )
+            if not validation_result.is_valid:
+                return _invalid_input_result(file_name)
+
+            decoded = decode_pcm16_to_float32_from_file(audio_file, header)
+
         (
             waveform,
             downmixed_to_mono,
@@ -64,7 +92,11 @@ def _preprocess_wav_file(
             waveform=decoded,
             source_sample_rate_hz=header.sample_rate_hz,
         )
-    except (WavContainerError, WavDecodeError, WavFileNotReadableError):
+    except (FileNotFoundError, IsADirectoryError, PermissionError):
+        return _invalid_input_result(file_name)
+    except WavContainerError:
+        return _invalid_input_result(file_name)
+    except (WavDecodeError, WavFileNotReadableError):
         return build_invalid_preprocessing_result(
             file_name=file_name,
             code=PreprocessingErrorCode.DECODE_ERROR,
@@ -81,6 +113,14 @@ def _preprocess_wav_file(
         resample_up=up,
         resample_down=down,
         safety_clipped=safety_clipped,
+    )
+
+
+def _invalid_input_result(file_name: str) -> PreprocessedAudioResult:
+    return build_invalid_preprocessing_result(
+        file_name=file_name,
+        code=PreprocessingErrorCode.INVALID_INPUT,
+        message="The WAV file failed Phase 2 technical validation.",
     )
 
 

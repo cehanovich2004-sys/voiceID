@@ -36,21 +36,31 @@ local paths.
 
 The deterministic Phase 3 pipeline is:
 
-1. Run Phase 2 validation for the local WAV path.
-2. Reject invalid Phase 2 input without returning a partial waveform.
-3. Decode PCM16 samples without integer overflow.
-4. Convert samples to float32 using `sample / 32768.0`.
-5. Downmix stereo with an arithmetic mean in floating point.
-6. Skip downmix for mono input.
-7. Remove DC offset by subtracting the waveform mean.
-8. Resample to 16000 Hz with `scipy.signal.resample_poly`.
-9. Skip resampling when the source sample rate is already 16000 Hz.
-10. Reduce `up` and `down` resampling factors with `gcd(input_rate, 16000)`.
-11. Apply safety clipping to `[-1.0, 1.0]`.
-12. Validate output invariants before returning a valid result.
+1. Open the local WAV file once.
+2. Read and validate the RIFF/WAVE header from that open file snapshot.
+3. Decode signal statistics from the same open file snapshot.
+4. Apply the Phase 2 validation policy to the same snapshot metadata and
+   signal statistics.
+5. Reject invalid Phase 2 input without returning a partial waveform.
+6. Decode PCM16 samples from the same open file snapshot without integer
+   overflow.
+7. Convert samples to float32 using `sample / 32768.0`.
+8. Downmix stereo with an arithmetic mean in floating point.
+9. Skip downmix for mono input.
+10. Remove DC offset by subtracting the waveform mean.
+11. Resample to 16000 Hz with `scipy.signal.resample_poly`.
+12. Skip resampling when the source sample rate is already 16000 Hz.
+13. Reduce `up` and `down` resampling factors with `gcd(input_rate, 16000)`.
+14. Apply safety clipping to `[-1.0, 1.0]`.
+15. Validate output invariants before returning a valid result.
 
 Safety clipping is only a guard against numerical overshoot from processing.
 It is not peak, gain, RMS, loudness, or speech normalization.
+
+Validation, source metadata, and PCM decode are intentionally tied to the same
+open file snapshot. If the pathname is replaced after the file is opened, the
+current preprocessing operation continues to use the already opened snapshot
+instead of mixing metadata from one file state with waveform data from another.
 
 ## Result Contract
 
@@ -93,6 +103,12 @@ errors, and normal logs must not include waveform values or filesystem paths.
 The returned waveform must be finite, one-dimensional, `float32`, and clipped
 to `[-1.0, 1.0]`.
 
+`VALID` means the preprocessing contract succeeded. It does not mean that the
+post-preprocessing signal is useful for speaker verification. For example,
+antiphase stereo can become zero after arithmetic mean downmix, and a technically
+valid near-constant signal can become zero after DC offset removal. A
+post-preprocessing energy policy is deferred to a future CTO decision.
+
 ## Error Codes
 
 - `INVALID_INPUT`: Phase 2 technical validation failed.
@@ -129,3 +145,4 @@ Phase 3 does not implement:
 - UI;
 - database storage;
 - saving or copying audio files.
+- post-preprocessing energy acceptance decisions.

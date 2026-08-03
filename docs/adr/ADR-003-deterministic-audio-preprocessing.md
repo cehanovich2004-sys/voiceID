@@ -11,7 +11,9 @@ The implementation uses:
 
 - `numpy` for typed array operations and PCM16 to float32 conversion;
 - `scipy.signal.resample_poly` for deterministic polyphase resampling;
-- Phase 2 validation as the input gate;
+- Phase 2 validation policy as the input gate;
+- one open file snapshot for Phase 3 header validation, signal statistics, and
+  PCM decode;
 - a typed `PreprocessedAudioResult` that keeps waveform data out of public
   `repr()` and `to_dict()` output;
 - a framework-neutral application service in the existing modular monolith.
@@ -45,6 +47,12 @@ foundation for deterministic numeric arrays, and `scipy.signal.resample_poly`
 provides a stable polyphase resampling primitive with anti-aliasing behavior
 appropriate for offline preprocessing.
 
+Phase 3 must also avoid mixing validation metadata from one path state with
+waveform data from another path state. Opening the file once and applying Phase
+2 policy to the header and signal statistics read from that open snapshot keeps
+source metadata and decoded waveform aligned without adding content
+fingerprinting to the MVP scope.
+
 `resample_poly` also lets the implementation pass reduced `up` and `down`
 factors derived from `gcd(input_rate, 16000)`, which keeps the conversion
 explicit and deterministic for the five Phase 2-supported sample rates.
@@ -63,6 +71,11 @@ parallel architecture and preserves the modular monolith chosen in ADR-001.
 - Input audio files are read but not modified, copied, stored, or converted on
   disk.
 - Safety clipping guards numeric invariants but is not normalization.
+- A pathname replacement after the file is opened does not change the snapshot
+  used by the current preprocessing operation on platforms with normal
+  descriptor/rename semantics.
+- `VALID` can still contain a zero waveform after arithmetic mean downmix or DC
+  offset removal; post-preprocessing energy policy is explicitly deferred.
 - VAD, silence trimming, denoising, embeddings, scoring, and match decisions
   remain deferred.
 

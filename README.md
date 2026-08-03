@@ -113,6 +113,12 @@ invariant guard, not audio normalization.
 The public result does not expose absolute paths or waveform values in
 `repr()`, `to_dict()`, normal logs, or user-facing errors.
 
+Phase 3 ties header validation, source metadata, signal statistics, and PCM
+decode to one open file snapshot. `VALID` means the preprocessing contract
+succeeded; it does not mean the resulting signal is useful for speaker
+verification. Antiphase stereo or near-constant input can validly produce a
+zero waveform after downmix or DC offset removal.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
