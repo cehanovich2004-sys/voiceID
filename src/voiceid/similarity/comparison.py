@@ -118,9 +118,34 @@ def _validate_embedding(result: SpeakerEmbeddingResult) -> _ValidatedEmbedding:
         raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
     if embedding.shape != (metadata.embedding_dimension,):
         raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
+    if embedding.flags.writeable is not False:
+        raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
     if not bool(np.all(np.isfinite(embedding))):
         raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
+    _validate_input_metadata(metadata)
     return _ValidatedEmbedding(embedding=embedding, metadata=metadata)
+
+
+def _validate_input_metadata(metadata: EmbeddingMetadata) -> None:
+    if type(metadata.input_samples) is not int or metadata.input_samples <= 0:
+        raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
+    if (
+        type(metadata.input_duration_seconds) is not float
+        or not math.isfinite(metadata.input_duration_seconds)
+        or metadata.input_duration_seconds <= 0.0
+    ):
+        raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
+    try:
+        expected_duration = round(
+            metadata.input_samples / EXPECTED_SAMPLE_RATE_HZ,
+            6,
+        )
+    except OverflowError:
+        raise _SimilarityValidationError(
+            SimilarityErrorCode.INVALID_EMBEDDING
+        ) from None
+    if metadata.input_duration_seconds != expected_duration:
+        raise _SimilarityValidationError(SimilarityErrorCode.INVALID_EMBEDDING)
 
 
 def _l2_norm_float64(embedding: EmbeddingVector) -> float:

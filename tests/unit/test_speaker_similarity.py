@@ -148,6 +148,144 @@ def test_metadata_dimension_mismatch_is_invalid_embedding() -> None:
     _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
 
 
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("input_samples", 0),
+        ("input_samples", -1),
+        ("input_samples", True),
+        ("input_samples", 16000.0),
+        ("input_samples", np.int64(16000)),
+        ("input_samples", 10**1000),
+        ("input_duration_seconds", 0.0),
+        ("input_duration_seconds", -1.0),
+        ("input_duration_seconds", float("nan")),
+        ("input_duration_seconds", float("inf")),
+        ("input_duration_seconds", float("-inf")),
+        ("input_duration_seconds", 1),
+        ("input_duration_seconds", np.float64(1.0)),
+    ],
+)
+def test_invalid_runtime_input_metadata_is_rejected(
+    argument: str,
+    field: str,
+    value: object,
+) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    object.__setattr__(
+        target,
+        "metadata",
+        replace(_metadata(), **{field: value}),
+    )
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+
+
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+def test_inconsistent_samples_and_duration_are_rejected(argument: str) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    object.__setattr__(
+        target,
+        "metadata",
+        replace(
+            _metadata(),
+            input_samples=16001,
+            input_duration_seconds=1.0,
+        ),
+    )
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+
+
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+def test_writable_embedding_is_rejected_without_mutation(argument: str) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    writable = _basis(0)
+    before = writable.tobytes()
+    object.__setattr__(target, "embedding", writable)
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+    assert target.embedding is writable
+    assert writable.flags.writeable is True
+    assert writable.tobytes() == before
+
+
+def test_invalid_reference_metadata_precedes_candidate_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = _tamper(
+        _result(_basis(0)),
+        metadata=replace(_metadata(), input_samples=0),
+    )
+    candidate = _tamper(
+        _result(_basis(0)),
+        metadata=replace(_metadata(), input_duration_seconds=float("nan")),
+    )
+    original_validate = comparison_module._validate_embedding
+    calls: list[SpeakerEmbeddingResult] = []
+
+    def track(result: SpeakerEmbeddingResult) -> object:
+        calls.append(result)
+        return original_validate(result)
+
+    monkeypatch.setattr(comparison_module, "_validate_embedding", track)
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+    assert len(calls) == 1
+    assert calls[0] is reference
+
+
+@pytest.mark.parametrize(
+    ("field", "canary"),
+    [
+        ("input_samples", 987654321),
+        ("input_duration_seconds", 123456.789012),
+    ],
+)
+@pytest.mark.parametrize("argument", ["reference", "candidate"])
+def test_invalid_metadata_canary_is_not_exposed(
+    argument: str,
+    field: str,
+    canary: int | float,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reference = _result(_basis(0))
+    candidate = _result(_basis(0))
+    target = reference if argument == "reference" else candidate
+    object.__setattr__(
+        target,
+        "metadata",
+        replace(_metadata(), **{field: canary}),
+    )
+
+    result = compare_speaker_embeddings(reference, candidate)
+
+    _assert_invalid(result, SimilarityErrorCode.INVALID_EMBEDDING)
+    surfaces = (
+        repr(result),
+        str(result),
+        str(result.to_dict()),
+        str(result.errors),
+        caplog.text,
+    )
+    assert all(str(canary) not in surface for surface in surfaces)
+
+
 @pytest.mark.parametrize("missing_field", ["embedding", "metadata"])
 def test_missing_reference_embedding_state_is_rejected(missing_field: str) -> None:
     reference = _result(_basis(0))

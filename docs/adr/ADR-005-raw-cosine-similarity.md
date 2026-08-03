@@ -49,6 +49,8 @@ the Phase 4B embedding backend or Phase 5A contract.
 - Phase 5B must use labeled evaluation data and a separate ADR before adding
   calibration or verdict policy.
 - Runtime validation is fail-closed and returns exactly one stable safe error.
+- Writable vectors or inconsistent Phase 4B sample-count/duration metadata are
+  rejected without copying or repairing the input.
 - `MemoryError` and unexpected ordinary exceptions are sanitized as
   `COMPARISON_ERROR`; process-control exceptions pass through.
 - Embeddings and vector norms are not serialized, logged, or persisted.

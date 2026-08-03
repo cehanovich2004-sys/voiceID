@@ -58,8 +58,12 @@ with:
 - a one-dimensional NumPy array;
 - exact `float32` dtype;
 - shape `(192,)` matching metadata;
+- a read-only embedding array;
 - finite values;
 - finite L2 norm greater than `1e-8`;
+- exact Python `int` input sample count greater than zero;
+- exact Python `float` finite input duration greater than zero;
+- input duration equal to `round(input_samples / 16000, 6)`;
 - input sample rate `16000` Hz.
 
 The two results must match on:
