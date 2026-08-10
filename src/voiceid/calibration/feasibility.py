@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 
 from voiceid.audio import PREPROCESSING_CONTRACT_VERSION
-from voiceid.audio.preprocessing import PreprocessedAudioResult
+from voiceid.audio.preprocessing import (
+    PreprocessedAudioResult,
+    PreprocessingErrorCode,
+    PreprocessingIssue,
+)
 from voiceid.calibration.contracts import (
     CALIBRATION_CONTRACT_VERSION,
     CALIBRATION_PROTOCOL_IDENTIFIER,
@@ -50,7 +54,12 @@ from voiceid.embeddings.backends.speechbrain_ecapa import (
     SpeechBrainEcapaBackendFactory,
     default_speechbrain_ecapa_config,
 )
-from voiceid.embeddings.contracts import EMBEDDING_DIMENSION, SpeakerEmbeddingResult
+from voiceid.embeddings.contracts import (
+    EMBEDDING_DIMENSION,
+    EmbeddingErrorCode,
+    EmbeddingIssue,
+    SpeakerEmbeddingResult,
+)
 from voiceid.embeddings.loader import EmbeddingModelLoader
 from voiceid.embeddings.policy import (
     SPEECHBRAIN_ECAPA_MODEL_ID,
@@ -59,7 +68,12 @@ from voiceid.embeddings.policy import (
 )
 from voiceid.services.audio_preprocessing import preprocess_wav_file
 from voiceid.services.speaker_embedding import SpeakerEmbeddingService
-from voiceid.similarity import SIMILARITY_COMPARISON_VERSION, compare_speaker_embeddings
+from voiceid.similarity import (
+    SIMILARITY_COMPARISON_VERSION,
+    SimilarityErrorCode,
+    SimilarityIssue,
+    compare_speaker_embeddings,
+)
 
 FEASIBILITY_LABEL_CRITERIA_VERSION: Final = "phase5b-feasibility-label-v1"
 MIN_FEASIBILITY_SCORES_PER_CLASS: Final = 2
@@ -75,6 +89,11 @@ _REPORT_FILES: Final = (
     "summary.csv",
     "report.html",
 )
+_TRUSTED_PREPROCESSING_CODES: Final = frozenset(
+    code.value for code in PreprocessingErrorCode
+)
+_TRUSTED_EMBEDDING_CODES: Final = frozenset(code.value for code in EmbeddingErrorCode)
+_TRUSTED_SIMILARITY_CODES: Final = frozenset(code.value for code in SimilarityErrorCode)
 
 
 class FeasibilityLabel(StrEnum):
@@ -87,6 +106,14 @@ class FeasibilityLabel(StrEnum):
 
 class FeasibilityProbeError(ValueError):
     """Stable, privacy-safe feasibility probe failure."""
+
+
+class _FeasibilityInternalError(Exception):
+    """Private sentinel for controlled internal feasibility failures."""
+
+    def __init__(self, public_message: str) -> None:
+        super().__init__()
+        self.public_message = public_message
 
 
 class _EmbeddingService(Protocol):
@@ -147,8 +174,8 @@ def run_feasibility_probe(
         )
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise
-    except FeasibilityProbeError:
-        raise
+    except _FeasibilityInternalError as exc:
+        raise FeasibilityProbeError(exc.public_message) from None
     except Exception:
         raise FeasibilityProbeError(_PROBE_ERROR_MESSAGE) from None
 
@@ -213,27 +240,27 @@ def _load_manifest(manifest_path: Path) -> _Manifest:
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise
     except Exception:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE) from None
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE) from None
 
 
 def _parse_manifest(raw: object, *, base_dir: Path) -> _Manifest:
     if type(raw) is not dict:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     manifest = cast(dict[str, object], raw)
     if not set(manifest).issubset({"repository_commit_sha", "samples", "thresholds"}):
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     repository_commit_sha = manifest.get("repository_commit_sha")
     samples = manifest.get("samples")
     thresholds = manifest.get("thresholds", list(DEFAULT_EXPLORATORY_THRESHOLDS))
     if type(repository_commit_sha) is not str or type(samples) is not list:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
 
     parsed_samples = tuple(
         _parse_manifest_sample(sample, base_dir=base_dir) for sample in samples
     )
     parsed_thresholds = _parse_thresholds(thresholds)
     if not parsed_samples:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     return _Manifest(
         repository_commit_sha=repository_commit_sha,
         samples=parsed_samples,
@@ -243,7 +270,7 @@ def _parse_manifest(raw: object, *, base_dir: Path) -> _Manifest:
 
 def _parse_manifest_sample(raw: object, *, base_dir: Path) -> _ManifestSample:
     if type(raw) is not dict:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     sample = cast(dict[str, object], raw)
     if set(sample) != {
         "sample_id",
@@ -252,7 +279,7 @@ def _parse_manifest_sample(raw: object, *, base_dir: Path) -> _ManifestSample:
         "partition",
         "wav_path",
     }:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     sample_id = sample["sample_id"]
     subject_id = sample["subject_id"]
     source_group_id = sample["source_group_id"]
@@ -266,7 +293,7 @@ def _parse_manifest_sample(raw: object, *, base_dir: Path) -> _ManifestSample:
         or type(wav_path) is not str
         or not wav_path
     ):
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
 
     path = Path(wav_path)
     if not path.is_absolute():
@@ -284,14 +311,14 @@ def _parse_manifest_sample(raw: object, *, base_dir: Path) -> _ManifestSample:
 
 def _parse_thresholds(raw: object) -> tuple[float, ...]:
     if type(raw) is not list or not raw:
-        raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
     thresholds: list[float] = []
     for threshold in raw:
         if type(threshold) not in {int, float} or type(threshold) is bool:
-            raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+            raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
         value = float(threshold)
         if not math.isfinite(value) or not -1.0 <= value <= 1.0:
-            raise FeasibilityProbeError(_MANIFEST_ERROR_MESSAGE)
+            raise _FeasibilityInternalError(_MANIFEST_ERROR_MESSAGE)
         thresholds.append(value)
     return tuple(sorted(set(thresholds)))
 
@@ -387,7 +414,7 @@ def _build_offline_embedding_service(
     model_cache_dir: str | Path | None,
 ) -> SpeakerEmbeddingService:
     if model_cache_dir is None:
-        raise FeasibilityProbeError(_PROBE_ERROR_MESSAGE)
+        raise _FeasibilityInternalError(_PROBE_ERROR_MESSAGE)
     config = default_speechbrain_ecapa_config(cache_dir=model_cache_dir, offline=True)
     return SpeakerEmbeddingService(
         loader=EmbeddingModelLoader(SpeechBrainEcapaBackendFactory(config))
@@ -458,11 +485,32 @@ def _increment_issue_counts(
         invalid_counts[f"{prefix}.unknown"] += 1
         return
     for issue in issues:
-        code = getattr(issue, "code", None)
-        if type(code) is str and code:
+        code = _trusted_issue_code(prefix=prefix, issue=issue)
+        if code is not None:
             invalid_counts[f"{prefix}.{code}"] += 1
         else:
             invalid_counts[f"{prefix}.unknown"] += 1
+
+
+def _trusted_issue_code(*, prefix: str, issue: object) -> str | None:
+    if prefix == "preprocessing" and type(issue) is PreprocessingIssue:
+        code = issue.code
+        return (
+            code if type(code) is str and code in _TRUSTED_PREPROCESSING_CODES else None
+        )
+    if prefix == "embedding" and type(issue) is EmbeddingIssue:
+        code = issue.code
+        return code if type(code) is str and code in _TRUSTED_EMBEDDING_CODES else None
+    if prefix == "similarity" and type(issue) is SimilarityIssue:
+        code = issue.code
+        return code if type(code) is str and code in _TRUSTED_SIMILARITY_CODES else None
+    return None
+
+
+def _calibration_scores(scores: tuple[ScoreRecord, ...]) -> tuple[ScoreRecord, ...]:
+    return tuple(
+        score for score in scores if score.partition is CalibrationPartition.CALIBRATION
+    )
 
 
 def _calculate_threshold_metrics(
@@ -470,14 +518,15 @@ def _calculate_threshold_metrics(
     *,
     thresholds: tuple[float, ...],
 ) -> tuple[ThresholdMetric, ...]:
+    calibration_scores = _calibration_scores(scores)
     genuine_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.GENUINE
     )
     impostor_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.IMPOSTOR
     )
     metrics = []
@@ -506,14 +555,15 @@ def _summarize_probe(
     threshold_metrics: tuple[ThresholdMetric, ...],
     invalid_counts: Counter[str],
 ) -> FeasibilityReportSummary:
+    calibration_scores = _calibration_scores(scores)
     genuine_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.GENUINE
     )
     impostor_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.IMPOSTOR
     )
     overlap_low, overlap_high = _score_overlap(genuine_scores, impostor_scores)
@@ -627,7 +677,7 @@ def _write_reports(
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise
     except Exception:
-        raise FeasibilityProbeError(_PROBE_ERROR_MESSAGE) from None
+        raise _FeasibilityInternalError(_PROBE_ERROR_MESSAGE) from None
 
 
 def main(argv: list[str] | None = None) -> int:

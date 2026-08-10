@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import html
+import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,9 +17,13 @@ from voiceid.calibration.contracts import (
 
 PUBLIC_SCORE_DECIMALS: Final = 6
 HISTOGRAM_BINS: Final = 20
+_ALLOWED_LABELS: Final = frozenset({"PROMISING", "INCONCLUSIVE", "NOT_PROMISING"})
+_SAFE_COUNT_CODE_CHARACTERS: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._"
+)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ScoreRecord:
     """One reportable score row without sample, subject, pair, or path IDs."""
 
@@ -27,8 +32,24 @@ class ScoreRecord:
     comparison_class: CalibrationComparisonClass
     score: float
 
+    def __post_init__(self) -> None:
+        """Validate the privacy-safe score row contract."""
 
-@dataclass(frozen=True, slots=True)
+        if type(self.row_index) is not int or self.row_index <= 0:
+            raise ValueError("Invalid report score row.")
+        if type(self.partition) is not CalibrationPartition:
+            raise ValueError("Invalid report score row.")
+        if type(self.comparison_class) is not CalibrationComparisonClass:
+            raise ValueError("Invalid report score row.")
+        _validate_score_float(self.score)
+
+    def __repr__(self) -> str:
+        """Return a safe representation without row values."""
+
+        return "ScoreRecord(redacted=True)"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class ThresholdMetric:
     """Exploratory FAR/FRR for one threshold."""
 
@@ -40,8 +61,31 @@ class ThresholdMetric:
     impostor_total: int
     genuine_total: int
 
+    def __post_init__(self) -> None:
+        """Validate threshold metric fields before report serialization."""
 
-@dataclass(frozen=True, slots=True)
+        _validate_score_float(self.threshold)
+        _validate_rate_float(self.far)
+        _validate_rate_float(self.frr)
+        for value in (
+            self.false_accepts,
+            self.false_rejects,
+            self.impostor_total,
+            self.genuine_total,
+        ):
+            _validate_count_int(value)
+        if self.false_accepts > self.impostor_total:
+            raise ValueError("Invalid report threshold metric.")
+        if self.false_rejects > self.genuine_total:
+            raise ValueError("Invalid report threshold metric.")
+
+    def __repr__(self) -> str:
+        """Return a safe representation without metric values."""
+
+        return "ThresholdMetric(redacted=True)"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class ScoreDistribution:
     """Aggregate score distribution without individual identities."""
 
@@ -51,8 +95,30 @@ class ScoreDistribution:
     mean: float | None
     median: float | None
 
+    def __post_init__(self) -> None:
+        """Validate distribution fields before report serialization."""
 
-@dataclass(frozen=True, slots=True)
+        _validate_count_int(self.count)
+        values = (self.minimum, self.maximum, self.mean, self.median)
+        if self.count == 0:
+            if values != (None, None, None, None):
+                raise ValueError("Invalid report distribution.")
+            return
+        for value in values:
+            if value is None:
+                raise ValueError("Invalid report distribution.")
+            _validate_score_float(value)
+        if self.minimum is not None and self.maximum is not None:
+            if self.minimum > self.maximum:
+                raise ValueError("Invalid report distribution.")
+
+    def __repr__(self) -> str:
+        """Return a safe representation without distribution values."""
+
+        return "ScoreDistribution(redacted=True)"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class FeasibilityReportSummary:
     """Privacy-safe summary for CSV and HTML reports."""
 
@@ -67,10 +133,53 @@ class FeasibilityReportSummary:
     overlap_high: float | None
     invalid_counts: Counter[str]
 
+    def __post_init__(self) -> None:
+        """Validate summary fields before report serialization."""
+
+        _validate_summary(self)
+
+    def __repr__(self) -> str:
+        """Return a safe representation without detailed counts."""
+
+        return "FeasibilityReportSummary(redacted=True)"
+
+
+def _validate_summary(summary: FeasibilityReportSummary) -> None:
+    if type(summary) is not FeasibilityReportSummary:
+        raise ValueError("Invalid report summary.")
+    if type(summary.label) is not str or summary.label not in _ALLOWED_LABELS:
+        raise ValueError("Invalid report summary.")
+    if (
+        type(summary.label_criteria_version) is not str
+        or not summary.label_criteria_version
+        or summary.label_criteria_version.strip() != summary.label_criteria_version
+    ):
+        raise ValueError("Invalid report summary.")
+    for value in (
+        summary.total_samples,
+        summary.generated_pairs,
+        summary.evaluated_scores,
+    ):
+        _validate_count_int(value)
+    if type(summary.genuine_distribution) is not ScoreDistribution:
+        raise ValueError("Invalid report summary.")
+    if type(summary.impostor_distribution) is not ScoreDistribution:
+        raise ValueError("Invalid report summary.")
+    _validate_optional_score_float(summary.overlap_low)
+    _validate_optional_score_float(summary.overlap_high)
+    if (
+        summary.overlap_low is not None
+        and summary.overlap_high is not None
+        and summary.overlap_low > summary.overlap_high
+    ):
+        raise ValueError("Invalid report summary.")
+    _validate_invalid_counts(summary.invalid_counts)
+
 
 def write_score_csv(path: Path, scores: tuple[ScoreRecord, ...]) -> None:
     """Write per-score CSV without pair or sample identifiers."""
 
+    _validate_score_records(scores)
     with path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
             csv_file,
@@ -94,6 +203,7 @@ def write_threshold_metrics_csv(
 ) -> None:
     """Write exploratory threshold metrics CSV."""
 
+    _validate_threshold_metrics(metrics)
     with path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
             csv_file,
@@ -125,6 +235,7 @@ def write_threshold_metrics_csv(
 def write_summary_csv(path: Path, summary: FeasibilityReportSummary) -> None:
     """Write key-value summary CSV without sensitive row-level fields."""
 
+    _validate_summary(summary)
     rows = [
         ("label", summary.label),
         ("label_criteria_version", summary.label_criteria_version),
@@ -154,6 +265,9 @@ def write_html_report(
 ) -> None:
     """Write a static exploratory HTML report."""
 
+    _validate_summary(summary)
+    _validate_score_records(scores)
+    _validate_threshold_metrics(threshold_metrics)
     genuine_scores = tuple(
         score.score
         for score in scores
@@ -199,7 +313,7 @@ def write_html_report(
 
 def _summary_table(summary: FeasibilityReportSummary) -> str:
     invalid_rows = "".join(
-        f"<tr><th>{html.escape(code)}</th><td>{count}</td></tr>"
+        f"<tr><th>{_html(code)}</th><td>{_html(str(count))}</td></tr>"
         for code, count in sorted(summary.invalid_counts.items())
     )
     if not invalid_rows:
@@ -214,8 +328,7 @@ def _summary_table(summary: FeasibilityReportSummary) -> str:
         ("overlap_high", _format_optional_float(summary.overlap_high)),
     )
     body = "".join(
-        f"<tr><th>{html.escape(key)}</th><td>{html.escape(value)}</td></tr>"
-        for key, value in rows
+        f"<tr><th>{_html(key)}</th><td>{_html(value)}</td></tr>" for key, value in rows
     )
     return f"<table><tbody>{body}{invalid_rows}</tbody></table>"
 
@@ -227,12 +340,12 @@ def _distribution_table(summary: FeasibilityReportSummary) -> str:
     )
     body = "".join(
         "<tr>"
-        f"<td>{label}</td>"
-        f"<td>{distribution.count}</td>"
-        f"<td>{_format_optional_float(distribution.minimum)}</td>"
-        f"<td>{_format_optional_float(distribution.maximum)}</td>"
-        f"<td>{_format_optional_float(distribution.mean)}</td>"
-        f"<td>{_format_optional_float(distribution.median)}</td>"
+        f"<td>{_html(label)}</td>"
+        f"<td>{_html(str(distribution.count))}</td>"
+        f"<td>{_html(_format_optional_float(distribution.minimum))}</td>"
+        f"<td>{_html(_format_optional_float(distribution.maximum))}</td>"
+        f"<td>{_html(_format_optional_float(distribution.mean))}</td>"
+        f"<td>{_html(_format_optional_float(distribution.median))}</td>"
         "</tr>"
         for label, distribution in rows
     )
@@ -257,9 +370,9 @@ def _histogram_table(
         high = -1.0 + (index + 1) * (2.0 / HISTOGRAM_BINS)
         rows.append(
             "<tr>"
-            f"<td>[{_format_float(low)}, {_format_float(high)})</td>"
-            f"<td>{genuine_count}</td>"
-            f"<td>{impostor_count}</td>"
+            f"<td>{_html(f'[{_format_float(low)}, {_format_float(high)})')}</td>"
+            f"<td>{_html(str(genuine_count))}</td>"
+            f"<td>{_html(str(impostor_count))}</td>"
             "</tr>"
         )
     return (
@@ -272,11 +385,11 @@ def _histogram_table(
 def _threshold_table(metrics: tuple[ThresholdMetric, ...]) -> str:
     body = "".join(
         "<tr>"
-        f"<td>{_format_float(metric.threshold)}</td>"
-        f"<td>{_format_float(metric.far)}</td>"
-        f"<td>{_format_float(metric.frr)}</td>"
-        f"<td>{metric.false_accepts}</td>"
-        f"<td>{metric.false_rejects}</td>"
+        f"<td>{_html(_format_float(metric.threshold))}</td>"
+        f"<td>{_html(_format_float(metric.far))}</td>"
+        f"<td>{_html(_format_float(metric.frr))}</td>"
+        f"<td>{_html(str(metric.false_accepts))}</td>"
+        f"<td>{_html(str(metric.false_rejects))}</td>"
         "</tr>"
         for metric in metrics
     )
@@ -304,3 +417,58 @@ def _format_optional_float(value: float | None) -> str:
 
 def _format_float(value: float) -> str:
     return f"{value:.{PUBLIC_SCORE_DECIMALS}f}"
+
+
+def _html(value: str) -> str:
+    if type(value) is not str:
+        raise ValueError("Invalid report value.")
+    return html.escape(value, quote=True)
+
+
+def _validate_score_records(scores: tuple[ScoreRecord, ...]) -> None:
+    if type(scores) is not tuple:
+        raise ValueError("Invalid report scores.")
+    if any(type(score) is not ScoreRecord for score in scores):
+        raise ValueError("Invalid report scores.")
+
+
+def _validate_threshold_metrics(metrics: tuple[ThresholdMetric, ...]) -> None:
+    if type(metrics) is not tuple:
+        raise ValueError("Invalid report threshold metrics.")
+    if any(type(metric) is not ThresholdMetric for metric in metrics):
+        raise ValueError("Invalid report threshold metrics.")
+
+
+def _validate_invalid_counts(invalid_counts: Counter[str]) -> None:
+    if type(invalid_counts) is not Counter:
+        raise ValueError("Invalid report summary.")
+    for code, count in invalid_counts.items():
+        if (
+            type(code) is not str
+            or not code
+            or code.strip() != code
+            or not set(code).issubset(_SAFE_COUNT_CODE_CHARACTERS)
+        ):
+            raise ValueError("Invalid report summary.")
+        _validate_count_int(count)
+
+
+def _validate_count_int(value: int) -> None:
+    if type(value) is not int or value < 0:
+        raise ValueError("Invalid report count.")
+
+
+def _validate_optional_score_float(value: float | None) -> None:
+    if value is None:
+        return
+    _validate_score_float(value)
+
+
+def _validate_score_float(value: float) -> None:
+    if type(value) is not float or not math.isfinite(value) or not -1.0 <= value <= 1.0:
+        raise ValueError("Invalid report score.")
+
+
+def _validate_rate_float(value: float) -> None:
+    if type(value) is not float or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("Invalid report rate.")

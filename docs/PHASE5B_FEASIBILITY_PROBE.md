@@ -86,12 +86,20 @@ Pairs are generated deterministically from manifest samples:
 
 Pair IDs are deterministic internal opaque IDs. They are not written to reports.
 
+`CALIBRATION` is the only partition used for exploratory thresholds, FAR/FRR,
+score overlap, and the final feasibility label. `HOLDOUT` scores may be
+generated and listed in `scores.csv` for later inspection, but they do not
+influence exploratory metrics, label criteria, or any threshold-related
+summary. There is no fallback from `HOLDOUT` to `CALIBRATION`.
+
 ## Reports
 
 The output directory contains:
 
-- `scores.csv`: row index, partition, comparison class, raw cosine score;
-- `threshold_metrics.csv`: exploratory threshold, FAR, FRR, counts;
+- `scores.csv`: row index, partition, comparison class, raw cosine score for
+  evaluated pairs from any partition;
+- `threshold_metrics.csv`: `CALIBRATION`-only exploratory threshold, FAR, FRR,
+  and counts;
 - `summary.csv`: aggregate counts, overlap, invalid counts, final label;
 - `report.html`: static local report with summary, distributions, histogram,
   and exploratory FAR/FRR table.
@@ -103,9 +111,15 @@ Reports must not contain:
 - waveforms or embedding values;
 - tokens, secrets, cache paths, or raw exception text.
 
+Issue codes are accepted only from trusted Phase 3, Phase 4B, and Phase 5A
+contracts. Unknown, malformed, or forged codes are collapsed to
+`<stage>.unknown`. Raw issue strings, paths, tokens, sample identifiers,
+waveform-like values, and exception messages are not serialized to CSV, HTML,
+stdout, stderr, or public exceptions.
+
 ## Metrics
 
-FAR and FRR are reported only for exploratory thresholds:
+FAR and FRR are reported only for `CALIBRATION` exploratory thresholds:
 
 ```text
 FAR(threshold) = impostor scores >= threshold / evaluated impostor scores

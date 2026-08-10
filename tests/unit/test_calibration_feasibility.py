@@ -6,12 +6,19 @@ import json
 import math
 import struct
 import wave
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import voiceid.calibration.feasibility as feasibility
 from voiceid.audio import PREPROCESSING_CONTRACT_VERSION
+from voiceid.audio.preprocessing import (
+    PreprocessedAudioResult,
+    PreprocessingIssue,
+    PreprocessingStatus,
+)
 from voiceid.calibration.contracts import (
     CalibrationComparisonClass,
     CalibrationPartition,
@@ -27,9 +34,17 @@ from voiceid.calibration.feasibility import (
     _calculate_threshold_metrics,
     _classify_feasibility_label,
     _generate_pairs,
+    _increment_issue_counts,
+    _summarize_probe,
     run_feasibility_probe,
 )
-from voiceid.calibration.reporting import ScoreRecord, ThresholdMetric
+from voiceid.calibration.reporting import (
+    FeasibilityReportSummary,
+    ScoreDistribution,
+    ScoreRecord,
+    ThresholdMetric,
+    write_html_report,
+)
 from voiceid.embeddings import (
     EMBEDDING_CONTRACT_VERSION,
     SPEECHBRAIN_ECAPA_BACKEND_VERSION,
@@ -37,6 +52,7 @@ from voiceid.embeddings import (
 from voiceid.embeddings.contracts import (
     EMBEDDING_DIMENSION,
     EmbeddingErrorCode,
+    EmbeddingIssue,
     EmbeddingMetadata,
     EmbeddingStatus,
     SpeakerEmbeddingResult,
@@ -46,6 +62,12 @@ from voiceid.embeddings.policy import (
     SPEECHBRAIN_ECAPA_MODEL_ID,
     SPEECHBRAIN_ECAPA_MODEL_REVISION,
     TARGET_EMBEDDING_SAMPLE_RATE_HZ,
+)
+from voiceid.similarity import (
+    SimilarityErrorCode,
+    SimilarityIssue,
+    SimilarityStatus,
+    SpeakerSimilarityResult,
 )
 
 _BASELINE_SHA = "ab48bcf68b9fd7d2cd5f1edb98302b3a7a3b883d"
@@ -252,6 +274,77 @@ def test_far_frr_metric_boundaries_are_deterministic() -> None:
     )
 
 
+def test_calibration_metrics_and_label_ignore_holdout_scores() -> None:
+    calibration_scores = (
+        _score(1, CalibrationComparisonClass.GENUINE, 0.9),
+        _score(2, CalibrationComparisonClass.GENUINE, 0.8),
+        _score(3, CalibrationComparisonClass.IMPOSTOR, -0.2),
+        _score(4, CalibrationComparisonClass.IMPOSTOR, -0.1),
+    )
+    holdout_scores = (
+        _score(
+            5,
+            CalibrationComparisonClass.GENUINE,
+            -1.0,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            6,
+            CalibrationComparisonClass.GENUINE,
+            -1.0,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            7,
+            CalibrationComparisonClass.IMPOSTOR,
+            1.0,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            8,
+            CalibrationComparisonClass.IMPOSTOR,
+            1.0,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+    )
+    thresholds = (0.5,)
+
+    calibration_metrics = _calculate_threshold_metrics(
+        calibration_scores,
+        thresholds=thresholds,
+    )
+    combined_metrics = _calculate_threshold_metrics(
+        calibration_scores + holdout_scores,
+        thresholds=thresholds,
+    )
+    calibration_summary = _summarize_probe(
+        total_samples=4,
+        generated_pairs=4,
+        scores=calibration_scores,
+        threshold_metrics=calibration_metrics,
+        invalid_counts=Counter(),
+    )
+    combined_summary = _summarize_probe(
+        total_samples=8,
+        generated_pairs=8,
+        scores=calibration_scores + holdout_scores,
+        threshold_metrics=combined_metrics,
+        invalid_counts=Counter(),
+    )
+
+    assert combined_metrics == calibration_metrics
+    assert combined_summary.label == calibration_summary.label == "PROMISING"
+    assert combined_summary.overlap_low == calibration_summary.overlap_low
+    assert (
+        combined_summary.genuine_distribution
+        == calibration_summary.genuine_distribution
+    )
+    assert (
+        combined_summary.impostor_distribution
+        == calibration_summary.impostor_distribution
+    )
+
+
 def test_label_requires_minimum_scores_per_class() -> None:
     metrics = (ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1),)
 
@@ -359,6 +452,265 @@ def test_missing_embedding_excludes_pairs_without_partial_score(
     assert result.invalid_counts["pair_excluded.missing_embedding"] > 0
 
 
+@pytest.mark.parametrize(
+    ("stage", "issue_code"),
+    (
+        ("preprocessing", "TOKEN_PATH_CANARY"),
+        ("embedding", "TOKEN_EMBEDDING_CANARY"),
+        ("similarity", "TOKEN_SIMILARITY_CANARY"),
+    ),
+)
+def test_unknown_issue_codes_are_allowlisted_to_generic_unknown(
+    stage: str,
+    issue_code: str,
+) -> None:
+    invalid_counts: Counter[str] = Counter()
+    if stage == "preprocessing":
+        issue: object = PreprocessingIssue(issue_code, "leak")
+    elif stage == "embedding":
+        issue = EmbeddingIssue(issue_code, "leak")
+    else:
+        issue = _forged_similarity_issue(issue_code)
+
+    _increment_issue_counts(stage, (issue,), invalid_counts)
+
+    assert invalid_counts == Counter({f"{stage}.unknown": 1})
+    assert "TOKEN" not in repr(invalid_counts)
+
+
+@pytest.mark.parametrize(
+    ("stage", "issue"),
+    (
+        (
+            "preprocessing",
+            PreprocessingIssue("PREPROCESSING_ERROR", "TOKEN_MESSAGE_CANARY"),
+        ),
+        (
+            "embedding",
+            EmbeddingIssue("INFERENCE_FAILED", "TOKEN_MESSAGE_CANARY"),
+        ),
+        (
+            "similarity",
+            SimilarityIssue(
+                "COMPARISON_ERROR",
+                "Speaker embedding comparison failed safely.",
+            ),
+        ),
+    ),
+)
+def test_known_issue_codes_preserve_only_stable_codes(
+    stage: str,
+    issue: object,
+) -> None:
+    invalid_counts: Counter[str] = Counter()
+
+    _increment_issue_counts(stage, (issue,), invalid_counts)
+
+    assert len(invalid_counts) == 1
+    assert next(iter(invalid_counts.values())) == 1
+    assert "TOKEN_MESSAGE_CANARY" not in repr(invalid_counts)
+
+
+def test_malicious_issue_object_does_not_have_code_accessed() -> None:
+    class MaliciousIssue:
+        @property
+        def code(self) -> str:
+            raise AssertionError("code property should not be accessed")
+
+    invalid_counts: Counter[str] = Counter()
+
+    _increment_issue_counts("embedding", (MaliciousIssue(),), invalid_counts)
+
+    assert invalid_counts == Counter({"embedding.unknown": 1})
+
+
+@pytest.mark.parametrize("stage", ("preprocessing", "embedding", "similarity"))
+def test_pipeline_sanitizes_unknown_stage_issue_code_canaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    output_dir = tmp_path / "reports"
+    wav_paths = {
+        _SAMPLE_A1: tmp_path / "a1.wav",
+        _SAMPLE_A2: tmp_path / "a2.wav",
+        _SAMPLE_B1: tmp_path / "b1.wav",
+        _SAMPLE_B2: tmp_path / "b2.wav",
+    }
+    for wav_path in wav_paths.values():
+        _write_wav(wav_path)
+    _write_manifest(manifest_path, wav_paths)
+    service: object = _FakeEmbeddingService(
+        (
+            _unit_embedding(0),
+            _unit_embedding(0),
+            _unit_embedding(1),
+            _unit_embedding(1),
+        )
+    )
+
+    if stage == "preprocessing":
+        monkeypatch.setattr(
+            feasibility,
+            "preprocess_wav_file",
+            lambda _path: PreprocessedAudioResult(
+                status=PreprocessingStatus.INVALID,
+                file_name="safe.wav",
+                waveform=None,
+                metadata=None,
+                errors=(PreprocessingIssue("TOKEN_PREPROCESS_CANARY", "leak"),),
+            ),
+        )
+    elif stage == "embedding":
+        service = _UnknownIssueEmbeddingService()
+    else:
+        monkeypatch.setattr(
+            feasibility,
+            "compare_speaker_embeddings",
+            lambda _reference, _probe: _unknown_issue_similarity_result(),
+        )
+
+    result = run_feasibility_probe(
+        manifest_path=manifest_path,
+        output_dir=output_dir,
+        embedding_service=service,
+    )
+
+    assert result.invalid_counts[f"{stage}.unknown"] > 0
+    combined_report = "\n".join(
+        (output_dir / file_name).read_text(encoding="utf-8")
+        for file_name in result.report_files
+    )
+    assert "TOKEN_" not in combined_report
+    assert "CANARY" not in combined_report
+
+
+def test_public_boundary_sanitizes_injected_feasibility_probe_error(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    wav_paths = {
+        _SAMPLE_A1: tmp_path / "a1.wav",
+        _SAMPLE_A2: tmp_path / "a2.wav",
+        _SAMPLE_B1: tmp_path / "b1.wav",
+        _SAMPLE_B2: tmp_path / "b2.wav",
+    }
+    for wav_path in wav_paths.values():
+        _write_wav(wav_path)
+    _write_manifest(manifest_path, wav_paths)
+
+    class ExplodingService:
+        def embed(self, _preprocessed_audio: object) -> SpeakerEmbeddingResult:
+            raise FeasibilityProbeError(
+                "/Users/private/TOKEN_PATH_CANARY waveform=[0.123456]"
+            )
+
+    with pytest.raises(FeasibilityProbeError) as exc_info:
+        run_feasibility_probe(
+            manifest_path=manifest_path,
+            output_dir=tmp_path / "reports",
+            embedding_service=ExplodingService(),
+        )
+
+    assert str(exc_info.value) == "Feasibility probe failed safely."
+    assert "TOKEN_PATH_CANARY" not in str(exc_info.value)
+    assert "0.123456" not in str(exc_info.value)
+    assert str(tmp_path) not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("exception_type", (KeyboardInterrupt, SystemExit, MemoryError))
+def test_public_boundary_does_not_mask_critical_exceptions(
+    tmp_path: Path,
+    exception_type: type[BaseException],
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    wav_paths = {
+        _SAMPLE_A1: tmp_path / "a1.wav",
+        _SAMPLE_A2: tmp_path / "a2.wav",
+        _SAMPLE_B1: tmp_path / "b1.wav",
+        _SAMPLE_B2: tmp_path / "b2.wav",
+    }
+    for wav_path in wav_paths.values():
+        _write_wav(wav_path)
+    _write_manifest(manifest_path, wav_paths)
+
+    class ExplodingService:
+        def embed(self, _preprocessed_audio: object) -> SpeakerEmbeddingResult:
+            raise exception_type
+
+    with pytest.raises(exception_type):
+        run_feasibility_probe(
+            manifest_path=manifest_path,
+            output_dir=tmp_path / "reports",
+            embedding_service=ExplodingService(),
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "<script>TOKEN_ELEMENT_CANARY</script>",
+        '" autofocus onfocus="TOKEN_ATTRIBUTE_CANARY',
+        "&TOKEN_ENTITY_CANARY;",
+    ),
+)
+def test_html_report_rejects_forged_dynamic_payloads(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    summary = _summary()
+    object.__setattr__(summary, "invalid_counts", Counter({payload: 1}))
+
+    with pytest.raises(ValueError) as exc_info:
+        write_html_report(
+            tmp_path / "report.html",
+            summary=summary,
+            scores=(_score(1, CalibrationComparisonClass.GENUINE, 0.8),),
+            threshold_metrics=(ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1),),
+        )
+
+    assert str(exc_info.value) == "Invalid report summary."
+    assert "TOKEN" not in str(exc_info.value)
+    assert not (tmp_path / "report.html").exists()
+
+
+def test_html_report_rejects_forged_mapping_subclass_and_bool_counts(
+    tmp_path: Path,
+) -> None:
+    class CounterSubclass(Counter[str]):
+        pass
+
+    summary = _summary()
+    object.__setattr__(summary, "invalid_counts", CounterSubclass({"safe.code": True}))
+
+    with pytest.raises(ValueError) as exc_info:
+        write_html_report(
+            tmp_path / "report.html",
+            summary=summary,
+            scores=(_score(1, CalibrationComparisonClass.GENUINE, 0.8),),
+            threshold_metrics=(ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1),),
+        )
+
+    assert str(exc_info.value) == "Invalid report summary."
+
+
+def test_report_contract_rejects_bool_numeric_fields() -> None:
+    with pytest.raises(ValueError):
+        ScoreRecord(
+            True,
+            CalibrationPartition.CALIBRATION,
+            CalibrationComparisonClass.GENUINE,
+            0.5,
+        )
+
+    with pytest.raises(ValueError):
+        ThresholdMetric(0.5, 0.0, 0.0, True, 0, 1, 1)
+
+    with pytest.raises(ValueError):
+        ScoreDistribution(True, None, None, None, None)
+
+
 def _embedding_result(embedding: np.ndarray) -> SpeakerEmbeddingResult:
     if embedding.shape != (EMBEDDING_DIMENSION,):
         return build_invalid_embedding_result(
@@ -390,6 +742,33 @@ def _invalid_embedding_marker() -> np.ndarray:
     return np.zeros(1, dtype=np.float32)
 
 
+class _UnknownIssueEmbeddingService:
+    def embed(self, _preprocessed_audio: object) -> SpeakerEmbeddingResult:
+        return SpeakerEmbeddingResult(
+            status=EmbeddingStatus.INVALID,
+            embedding=None,
+            metadata=None,
+            errors=(EmbeddingIssue("TOKEN_EMBED_CANARY", "leak"),),
+        )
+
+
+def _unknown_issue_similarity_result() -> SpeakerSimilarityResult:
+    result = SpeakerSimilarityResult(
+        status=SimilarityStatus.INVALID,
+        similarity=None,
+        metadata=None,
+        errors=(
+            SimilarityIssue(
+                SimilarityErrorCode.COMPARISON_ERROR.value,
+                "Speaker embedding comparison failed safely.",
+            ),
+        ),
+    )
+    object.__setattr__(result.errors[0], "code", "TOKEN_SIMILARITY_CANARY")
+    object.__setattr__(result.errors[0], "message", "leak")
+    return result
+
+
 def _unit_embedding(index: int, *, value: float = 1.0) -> np.ndarray:
     embedding = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
     embedding[index] = np.float32(value)
@@ -410,6 +789,58 @@ def _sample(
         source_group_id=source_group_id,
         partition=partition,
     )
+
+
+def _score(
+    row_index: int,
+    comparison_class: CalibrationComparisonClass,
+    score: float,
+    *,
+    partition: CalibrationPartition = CalibrationPartition.CALIBRATION,
+) -> ScoreRecord:
+    return ScoreRecord(
+        row_index=row_index,
+        partition=partition,
+        comparison_class=comparison_class,
+        score=score,
+    )
+
+
+def _summary() -> FeasibilityReportSummary:
+    return FeasibilityReportSummary(
+        label="INCONCLUSIVE",
+        label_criteria_version=FEASIBILITY_LABEL_CRITERIA_VERSION,
+        total_samples=4,
+        generated_pairs=6,
+        evaluated_scores=1,
+        genuine_distribution=ScoreDistribution(
+            count=1,
+            minimum=0.8,
+            maximum=0.8,
+            mean=0.8,
+            median=0.8,
+        ),
+        impostor_distribution=ScoreDistribution(
+            count=0,
+            minimum=None,
+            maximum=None,
+            mean=None,
+            median=None,
+        ),
+        overlap_low=None,
+        overlap_high=None,
+        invalid_counts=Counter({"embedding.unknown": 1}),
+    )
+
+
+def _forged_similarity_issue(code: str) -> SimilarityIssue:
+    issue = SimilarityIssue(
+        SimilarityErrorCode.COMPARISON_ERROR.value,
+        "Speaker embedding comparison failed safely.",
+    )
+    object.__setattr__(issue, "code", code)
+    object.__setattr__(issue, "message", "TOKEN_MESSAGE_CANARY")
+    return issue
 
 
 def _write_manifest(manifest_path: Path, wav_paths: dict[str, Path]) -> None:
