@@ -334,6 +334,10 @@ Sample manifest metadata:
   be copied.
 - B2 shape: `CalibrationSampleRecord` with pseudonymous sample, subject, source
   group, and partition fields only.
+- B2 identifier grammar:
+  - `sample_id = smp_<32 lowercase hex>`;
+  - `subject_id = sub_<32 lowercase hex>`;
+  - `source_group_id = src_<32 lowercase hex>`.
 
 Comparison pair metadata:
 
@@ -346,6 +350,7 @@ Comparison pair metadata:
   must fail closed.
 - B2 shape: `CalibrationPairRecord` with pair id, reference sample id, probe
   sample id, comparison class, and partition.
+- B2 `pair_id` grammar: `pair_<32 lowercase hex>`.
 
 Out of scope for PR B2:
 

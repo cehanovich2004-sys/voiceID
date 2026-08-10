@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import Final, cast
 
 from voiceid.audio import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.contracts import EMBEDDING_CONTRACT_VERSION, EMBEDDING_DIMENSION
@@ -23,8 +23,13 @@ CALIBRATION_CONTRACT_VERSION: Final = "phase5b-experiment-contracts-v1"
 
 _CONTRACT_ERROR_MESSAGE: Final = "Invalid calibration contract."
 _PLAN_ERROR_MESSAGE: Final = "Invalid calibration experiment plan."
-_IDENTIFIER_MAX_LENGTH: Final = 64
-_IDENTIFIER_RE: Final = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+_IDENTIFIER_SUFFIX_RE: Final = re.compile(r"^[0-9a-f]{32}$")
+_IDENTIFIER_PREFIXES: Final = {
+    "sample": "smp_",
+    "subject": "sub_",
+    "source": "src_",
+    "pair": "pair_",
+}
 _SHA_RE: Final = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
@@ -153,12 +158,22 @@ class CalibrationExperimentPlan:
 
     protocol: CalibrationProtocolIdentity
     provenance: CalibrationProcessingProvenance
-    samples: tuple[CalibrationSampleRecord, ...]
-    pairs: tuple[CalibrationPairRecord, ...]
+    samples: tuple[CalibrationSampleRecord, ...] | list[CalibrationSampleRecord]
+    pairs: tuple[CalibrationPairRecord, ...] | list[CalibrationPairRecord]
 
     def __post_init__(self) -> None:
         """Validate the complete plan at construction time."""
 
+        try:
+            samples = _copy_plan_collection(self.samples)
+            pairs = _copy_plan_collection(self.pairs)
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except _CalibrationContractError:
+            raise ValueError(_CONTRACT_ERROR_MESSAGE) from None
+
+        object.__setattr__(self, "samples", samples)
+        object.__setattr__(self, "pairs", pairs)
         _raise_contract_error_if_invalid(_validate_experiment_plan, self)
 
     def __repr__(self) -> str:
@@ -207,9 +222,15 @@ def _raise_contract_error_if_invalid(
 def _validate_protocol_identity(value: object) -> None:
     if type(value) is not CalibrationProtocolIdentity:
         raise _CalibrationContractError
-    if value.protocol_identifier != CALIBRATION_PROTOCOL_IDENTIFIER:
+    if not _is_expected_string(
+        value.protocol_identifier,
+        CALIBRATION_PROTOCOL_IDENTIFIER,
+    ):
         raise _CalibrationContractError
-    if value.calibration_contract_version != CALIBRATION_CONTRACT_VERSION:
+    if not _is_expected_string(
+        value.calibration_contract_version,
+        CALIBRATION_CONTRACT_VERSION,
+    ):
         raise _CalibrationContractError
     if not _is_sha(value.repository_commit_sha):
         raise _CalibrationContractError
@@ -218,15 +239,27 @@ def _validate_protocol_identity(value: object) -> None:
 def _validate_processing_provenance(value: object) -> None:
     if type(value) is not CalibrationProcessingProvenance:
         raise _CalibrationContractError
-    if value.preprocessing_contract_version != PREPROCESSING_CONTRACT_VERSION:
+    if not _is_expected_string(
+        value.preprocessing_contract_version,
+        PREPROCESSING_CONTRACT_VERSION,
+    ):
         raise _CalibrationContractError
-    if value.embedding_contract_version != EMBEDDING_CONTRACT_VERSION:
+    if not _is_expected_string(
+        value.embedding_contract_version,
+        EMBEDDING_CONTRACT_VERSION,
+    ):
         raise _CalibrationContractError
-    if value.backend_version != SPEECHBRAIN_ECAPA_BACKEND_VERSION:
+    if not _is_expected_string(
+        value.backend_version,
+        SPEECHBRAIN_ECAPA_BACKEND_VERSION,
+    ):
         raise _CalibrationContractError
-    if value.model_identifier != SPEECHBRAIN_ECAPA_MODEL_ID:
+    if not _is_expected_string(value.model_identifier, SPEECHBRAIN_ECAPA_MODEL_ID):
         raise _CalibrationContractError
-    if value.model_revision != SPEECHBRAIN_ECAPA_MODEL_REVISION:
+    if not _is_expected_string(
+        value.model_revision,
+        SPEECHBRAIN_ECAPA_MODEL_REVISION,
+    ):
         raise _CalibrationContractError
     if not _is_sha(value.model_revision):
         raise _CalibrationContractError
@@ -240,7 +273,10 @@ def _validate_processing_provenance(value: object) -> None:
         raise _CalibrationContractError
     if type(value.normalized) is not bool or value.normalized is not False:
         raise _CalibrationContractError
-    if value.comparison_version != SIMILARITY_COMPARISON_VERSION:
+    if not _is_expected_string(
+        value.comparison_version,
+        SIMILARITY_COMPARISON_VERSION,
+    ):
         raise _CalibrationContractError
 
 
@@ -324,18 +360,28 @@ def _validate_pair_against_samples(
 def _validate_identifier(value: object, *, prefix: str) -> None:
     if type(value) is not str:
         raise _CalibrationContractError
-    if not value or value != value.strip():
+    expected_prefix = _IDENTIFIER_PREFIXES[prefix]
+    if not value.startswith(expected_prefix):
         raise _CalibrationContractError
-    if not value.isascii() or len(value) > _IDENTIFIER_MAX_LENGTH:
-        raise _CalibrationContractError
-    if not value.startswith(f"{prefix}-"):
-        raise _CalibrationContractError
-    if not _IDENTIFIER_RE.fullmatch(value):
+    suffix = value[len(expected_prefix) :]
+    if _IDENTIFIER_SUFFIX_RE.fullmatch(suffix) is None:
         raise _CalibrationContractError
 
 
 def _is_sha(value: object) -> bool:
     return type(value) is str and _SHA_RE.fullmatch(value) is not None
+
+
+def _is_expected_string(value: object, expected: str) -> bool:
+    return type(value) is str and value == expected
+
+
+def _copy_plan_collection(value: object) -> tuple[object, ...]:
+    if type(value) is list:
+        return tuple(cast(list[object], value))
+    if type(value) is tuple:
+        return cast(tuple[object, ...], value)
+    raise _CalibrationContractError
 
 
 __all__ = [
