@@ -12,8 +12,9 @@ deferred.
 
 ## Current Status
 
-Status: Phase 5A is complete and merged into `main`. Phase 5B has not started
-and requires separate CTO approval.
+Status: Phase 5A is complete and merged into `main`. Phase 5B calibration
+implementation and execution have not started. The repository now documents a
+Phase 5B protocol/privacy prerequisite for future CTO-approved work.
 
 Implemented:
 
@@ -30,10 +31,13 @@ Implemented:
 - deterministic compatibility validation and error precedence;
 - smoke tests;
 - linting, formatting, type checking, and CI setup;
-- documentation and ADR-001 through ADR-005.
+- documentation and ADR-001 through ADR-006.
+- documentation-only Phase 5B experimental calibration protocol and privacy
+  plan.
 
 Not implemented yet:
 
+- executable Phase 5B experiment contracts or calibration tooling;
 - biometric thresholds and identity verdicts;
 - API;
 - Streamlit UI.
@@ -221,6 +225,26 @@ calibration workflow. This change adds no dataset tooling, threshold selection,
 probability output, identity verdict, enrollment migration, or biometric data
 storage. No migration is needed because enrollment storage does not exist.
 
+## Experimental Calibration Protocol
+
+Phase 5B is documented as a future controlled experiment, not an active runtime
+feature. The protocol identifier is:
+
+```text
+phase5b-experimental-calibration-protocol-v1
+```
+
+The Phase 5B protocol and privacy plan define research questions, genuine and
+impostor pair semantics, reference/probe separation, leakage controls,
+partitioning, metric semantics, privacy approval gates, and requirements for
+future experiment contracts.
+
+This documentation does not add executable experiment contracts, dataset
+ingestion, calibration runner, FAR/FRR/EER implementation, threshold selection,
+production decision policy, or real biometric data. Future PR B2 requires a
+separate CTO-approved API proposal before any Python experiment contracts are
+added.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
@@ -295,6 +319,8 @@ voiceID/
 │   ├── ML_PHASE1_AUDIO_AND_BASELINE_RECOMMENDATIONS.md
 │   ├── PHASE4_SPEAKER_EMBEDDINGS.md
 │   ├── PHASE5A_SPEAKER_SIMILARITY.md
+│   ├── PHASE5B_EXPERIMENTAL_CALIBRATION_PROTOCOL.md
+│   ├── PHASE5B_PRIVACY_DATA_GOVERNANCE.md
 │   ├── PHASE3_AUDIO_PREPROCESSING.md
 │   ├── PHASE2_WAV_VALIDATION.md
 │   ├── VOICEID_PROJECT_SPEC.md
@@ -306,7 +332,8 @@ voiceID/
 │       ├── ADR-002-wav-validation.md
 │       ├── ADR-003-deterministic-audio-preprocessing.md
 │       ├── ADR-004-baseline-embedding-backend.md
-│       └── ADR-005-raw-cosine-similarity.md
+│       ├── ADR-005-raw-cosine-similarity.md
+│       └── ADR-006-experimental-calibration-protocol.md
 ├── .github/
 │   └── workflows/
 │       └── ci.yml

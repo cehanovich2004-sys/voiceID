@@ -24,3 +24,4 @@ Current ADRs:
 - ADR-003: Deterministic Audio Preprocessing
 - ADR-004: Baseline Speaker Embedding Backend
 - ADR-005: Raw Cosine Similarity Boundary
+- ADR-006: Experimental Calibration Protocol Boundary

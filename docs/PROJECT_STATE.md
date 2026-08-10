@@ -3,8 +3,9 @@
 ## Current Phase
 
 No implementation phase is currently active. Phase 5A completed independent
-QA and CTO review and is merged into `main`. Phase 5B has not started and
-requires separate CTO approval.
+QA and CTO review and is merged into `main`. Phase 5B calibration
+implementation and execution have not started and require separate CTO
+approval.
 
 ## Completed Phases
 
@@ -35,9 +36,26 @@ requires separate CTO approval.
   version, and comparison version `1`.
 - Embedding comparison fails closed when processing provenance is malformed or
   incompatible.
-- This prerequisite does not start Phase 5B evaluation tooling and introduces
-  no dataset, calibration, threshold, probability, or identity-decision API.
+- Phase 5B protocol/privacy prerequisites are documented through
+  `phase5b-experimental-calibration-protocol-v1`, ADR-006, and the Phase 5B
+  privacy/data-governance plan.
+- These prerequisites do not start Phase 5B evaluation tooling and introduce
+  no executable experiment contracts, dataset ingestion, calibration runner,
+  threshold, probability, or identity-decision API.
 - Enrollment storage does not exist, so no migration is required.
+
+## Phase 5B PR B1 Documentation Scope
+
+- Formal experimental calibration protocol is documented.
+- Privacy and data-governance requirements are documented.
+- Requirements for future experiment contracts are documented without
+  approving a Python API shape.
+- Future approval gates are explicit: privacy/legal and dataset approval,
+  exact API proposal for PR B2, CTO approval of public contracts, separate PR
+  B2 implementation, and separate approval for calibration tooling/execution.
+- Phase 5B remains incomplete until executable contracts, approved data,
+  tooling, experiment execution, results review, and any operating-point
+  decision are separately approved.
 
 ## Assumptions
 
@@ -67,6 +85,7 @@ requires separate CTO approval.
 
 ## Next Step
 
-Phase 5B evaluation tooling remains unstarted. Any subsequent Phase 5B PR
-requires separate CTO authorization and approved dataset, consent, privacy,
-evaluation, and architecture requirements.
+Phase 5B evaluation tooling remains unstarted. The next implementation step is
+not automatic: PR B2 requires a separate CTO-approved exact API proposal for
+experiment contracts, plus approved dataset, consent, privacy, evaluation, and
+architecture requirements.
