@@ -47,6 +47,10 @@ calibration experiment-plan contract layer is available in `voiceid.calibration`
   contracts and a trusted validation boundary. It does not execute
   calibration, compute metrics, serialize audit manifests, or handle
   biometric artifacts.
+- A local opt-in feasibility probe is proposed to generate exploratory
+  CSV/HTML reports from an approved local manifest and prepared offline model
+  cache. The probe is not production calibration and does not select a
+  threshold or identity verdict.
 - Enrollment storage does not exist, so no migration is required.
 
 ## Phase 5B Protocol And Contract Scope
@@ -93,3 +97,5 @@ calibration experiment-plan contract layer is available in `voiceid.calibration`
 Phase 5B evaluation tooling remains unstarted. The next implementation step is
 not automatic: calibration tooling requires separate CTO approval, plus
 approved dataset, consent, privacy, evaluation, and architecture requirements.
+The feasibility probe is only an exploratory viability check and must not be
+treated as production biometric verification.
