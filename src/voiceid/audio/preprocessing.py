@@ -7,7 +7,7 @@ import wave
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import BinaryIO, Final, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -19,6 +19,7 @@ from voiceid.audio.wav_reader import PCM16_ABS_MAX, WavDecodeError, WavHeader
 TARGET_PREPROCESSING_SAMPLE_RATE_HZ = 16000
 TARGET_PREPROCESSING_CHANNELS = 1
 PUBLIC_FLOAT_DECIMALS = 6
+PREPROCESSING_CONTRACT_VERSION: Final = "phase3-v1"
 
 Float32Waveform = npt.NDArray[np.float32]
 

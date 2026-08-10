@@ -78,6 +78,10 @@ Completion criteria:
 
 Status: Not started. Implementation requires separate CTO approval.
 
+Prerequisite: processing provenance is explicitly versioned as `phase3-v1`,
+`phase4b-v1`, a backend adapter version, and comparison version `1`. This does
+not start calibration work or select a threshold.
+
 Goal: evaluate score distributions on approved labeled data before considering
 any biometric decision policy.
 

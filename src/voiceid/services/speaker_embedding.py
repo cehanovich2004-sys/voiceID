@@ -7,11 +7,13 @@ import math
 import numpy as np
 
 from voiceid.audio.preprocessing import (
+    PREPROCESSING_CONTRACT_VERSION,
     PreprocessedAudioResult,
     PreprocessingStatus,
 )
 from voiceid.embeddings.backends.base import EmbeddingBackend
 from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
     EmbeddingErrorCode,
     EmbeddingMetadata,
     EmbeddingStatus,
@@ -141,6 +143,9 @@ class SpeakerEmbeddingService:
             model_identifier=backend.model_identifier,
             model_revision=backend.model_revision,
             backend_name=backend.backend_name,
+            backend_version=backend.backend_version,
+            preprocessing_contract_version=PREPROCESSING_CONTRACT_VERSION,
+            embedding_contract_version=EMBEDDING_CONTRACT_VERSION,
             device=backend.device,
             input_sample_rate_hz=self._policy.expected_sample_rate_hz,
             input_samples=input_samples,

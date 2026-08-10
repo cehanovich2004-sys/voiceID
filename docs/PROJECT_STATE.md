@@ -29,6 +29,16 @@ requires separate CTO approval.
 - Added privacy, immutability, exception sanitization, and core-only tests.
 - Added ADR-005 and Phase 5A technical documentation.
 
+## Calibration Prerequisite
+
+- Processing provenance now uses `phase3-v1`, `phase4b-v1`, a backend adapter
+  version, and comparison version `1`.
+- Embedding comparison fails closed when processing provenance is malformed or
+  incompatible.
+- This prerequisite does not start Phase 5B evaluation tooling and introduces
+  no dataset, calibration, threshold, probability, or identity-decision API.
+- Enrollment storage does not exist, so no migration is required.
+
 ## Assumptions
 
 - Python remains constrained to `>=3.11,<3.12` pending a separate dependency
@@ -42,8 +52,6 @@ requires separate CTO approval.
 - What approved labeled dataset and evaluation protocol can support Phase 5B?
 - Which privacy, consent, retention, and legal controls are required before any
   real biometric evaluation?
-- How should a future preprocessing contract version be represented before
-  pipeline changes are introduced?
 - Which robustness, fairness, and anti-spoofing evaluations are required before
   production consideration?
 
@@ -59,6 +67,6 @@ requires separate CTO approval.
 
 ## Next Step
 
-No implementation phase is authorized. Phase 5B remains unstarted and requires
-separate CTO approval after its dataset, consent, privacy, evaluation, and
-architecture requirements are reviewed.
+Phase 5B evaluation tooling remains unstarted. Any subsequent Phase 5B PR
+requires separate CTO authorization and approved dataset, consent, privacy,
+evaluation, and architecture requirements.

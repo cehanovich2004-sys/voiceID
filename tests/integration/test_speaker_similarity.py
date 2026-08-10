@@ -11,7 +11,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from voiceid.audio.preprocessing import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
     EmbeddingMetadata,
     EmbeddingStatus,
     SpeakerEmbeddingResult,
@@ -90,6 +92,9 @@ def _result(index: int) -> SpeakerEmbeddingResult:
             model_identifier="model",
             model_revision="revision",
             backend_name="fake",
+            backend_version="fake-backend-v1",
+            preprocessing_contract_version=PREPROCESSING_CONTRACT_VERSION,
+            embedding_contract_version=EMBEDDING_CONTRACT_VERSION,
             device="cpu",
             input_sample_rate_hz=16000,
             input_samples=16000,

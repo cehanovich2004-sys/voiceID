@@ -15,6 +15,10 @@ class EmbeddingBackend(Protocol):
         """Return a stable backend name."""
 
     @property
+    def backend_version(self) -> str:
+        """Return the stable backend adapter contract version."""
+
+    @property
     def model_identifier(self) -> str:
         """Return the pinned model identifier."""
 

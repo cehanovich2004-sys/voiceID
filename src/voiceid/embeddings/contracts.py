@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Final
 
 import numpy as np
 import numpy.typing as npt
 
+from voiceid.audio.preprocessing import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.policy import SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION
 
 EmbeddingVector = npt.NDArray[np.float32]
 EMBEDDING_DIMENSION = SPEECHBRAIN_ECAPA_EMBEDDING_DIMENSION
+EMBEDDING_CONTRACT_VERSION: Final = "phase4b-v1"
+_VERSION_IDENTIFIER_CHARACTERS: Final = frozenset(
+    "abcdefghijklmnopqrstuvwxyz0123456789.-_+"
+)
 
 
 class EmbeddingStatus(StrEnum):
@@ -64,20 +70,45 @@ class EmbeddingMetadata:
     model_identifier: str
     model_revision: str
     backend_name: str
+    backend_version: str = field(repr=False)
+    preprocessing_contract_version: str = field(repr=False)
+    embedding_contract_version: str = field(repr=False)
     device: str
     input_sample_rate_hz: int
     input_samples: int
     input_duration_seconds: float
     normalized: bool
 
+    def __post_init__(self) -> None:
+        """Validate fixed contract versions and backend provenance."""
+
+        _validate_version_field(
+            name="preprocessing contract version",
+            value=self.preprocessing_contract_version,
+            expected=PREPROCESSING_CONTRACT_VERSION,
+        )
+        _validate_version_field(
+            name="embedding contract version",
+            value=self.embedding_contract_version,
+            expected=EMBEDDING_CONTRACT_VERSION,
+        )
+        _validate_version_field(
+            name="backend version",
+            value=self.backend_version,
+        )
+
     def to_dict(self) -> dict[str, str | int | float | bool]:
         """Return public metadata without embedding values."""
 
+        _validate_embedding_metadata_versions(self)
         return {
             "embedding_dimension": self.embedding_dimension,
             "model_identifier": self.model_identifier,
             "model_revision": self.model_revision,
             "backend_name": self.backend_name,
+            "backend_version": self.backend_version,
+            "preprocessing_contract_version": self.preprocessing_contract_version,
+            "embedding_contract_version": self.embedding_contract_version,
             "device": self.device,
             "input_sample_rate_hz": self.input_sample_rate_hz,
             "input_samples": self.input_samples,
@@ -185,6 +216,7 @@ def _validate_valid_result(
         raise ValueError("VALID embedding result requires shape (192,).")
     if metadata.embedding_dimension != EMBEDDING_DIMENSION:
         raise ValueError("VALID embedding metadata dimension must be 192.")
+    _validate_embedding_metadata_versions(metadata)
     if not np.all(np.isfinite(embedding)):
         raise ValueError("VALID embedding result requires finite embedding values.")
     copied = embedding.copy()
@@ -204,3 +236,49 @@ def _validate_invalid_result(
         raise ValueError("INVALID embedding result cannot contain metadata.")
     if len(errors) != 1:
         raise ValueError("INVALID embedding result requires exactly one error.")
+
+
+def _validate_embedding_metadata_versions(metadata: EmbeddingMetadata) -> None:
+    _validate_version_field(
+        name="preprocessing contract version",
+        value=metadata.preprocessing_contract_version,
+        expected=PREPROCESSING_CONTRACT_VERSION,
+    )
+    _validate_version_field(
+        name="embedding contract version",
+        value=metadata.embedding_contract_version,
+        expected=EMBEDDING_CONTRACT_VERSION,
+    )
+    _validate_version_field(
+        name="backend version",
+        value=metadata.backend_version,
+    )
+
+
+def _validate_version_field(
+    *,
+    name: str,
+    value: object,
+    expected: str | None = None,
+) -> None:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"Embedding {name} must be a non-empty string.")
+    if not is_valid_version_identifier(value):
+        raise ValueError(f"Embedding {name} must be a safe version identifier.")
+    if expected is not None and value != expected:
+        raise ValueError(f"Embedding {name} is not supported.")
+
+
+def is_valid_version_identifier(value: object) -> bool:
+    """Return whether a public contract version is a safe stable identifier."""
+
+    return (
+        type(value) is str
+        and bool(value.strip())
+        and value == value.strip()
+        and value.isascii()
+        and len(value) <= 128
+        and all(
+            character.lower() in _VERSION_IDENTIFIER_CHARACTERS for character in value
+        )
+    )

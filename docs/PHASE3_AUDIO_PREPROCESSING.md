@@ -103,6 +103,18 @@ errors, and normal logs must not include waveform values or filesystem paths.
 The returned waveform must be finite, one-dimensional, `float32`, and clipped
 to `[-1.0, 1.0]`.
 
+## Contract Version
+
+The stable preprocessing contract version is `phase3-v1`. It identifies the
+current 16000 Hz mono, one-dimensional `float32` waveform representation and
+the documented channel handling, DC offset removal, resampling, duration, and
+safety-clipping rules. It also records that Phase 3 performs no gain, peak,
+RMS, loudness, or speech normalization.
+
+The value is propagated into speaker embedding metadata for reproducibility and
+compatibility checks. Version equality identifies the processing contract; it
+does not prove signal quality or biometric accuracy.
+
 `VALID` means the preprocessing contract succeeded. It does not mean that the
 post-preprocessing signal is useful for speaker verification. For example,
 antiphase stereo can become zero after arithmetic mean downmix, and a technically

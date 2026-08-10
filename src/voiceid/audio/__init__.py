@@ -9,6 +9,7 @@ from voiceid.audio.models import (
     ValidationWarningCode,
 )
 from voiceid.audio.preprocessing import (
+    PREPROCESSING_CONTRACT_VERSION,
     PreprocessedAudioMetadata,
     PreprocessedAudioResult,
     PreprocessingErrorCode,
@@ -21,6 +22,7 @@ __all__ = [
     "AudioMetadata",
     "AudioValidationPolicy",
     "AudioValidationResult",
+    "PREPROCESSING_CONTRACT_VERSION",
     "PreprocessedAudioMetadata",
     "PreprocessedAudioResult",
     "PreprocessingErrorCode",

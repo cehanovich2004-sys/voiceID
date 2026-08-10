@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from voiceid.audio.preprocessing import PREPROCESSING_CONTRACT_VERSION
 from voiceid.embeddings.contracts import (
+    EMBEDDING_CONTRACT_VERSION,
     EmbeddingErrorCode,
     EmbeddingIssue,
     EmbeddingMetadata,
@@ -25,6 +29,9 @@ def test_valid_embedding_result_hides_embedding_values() -> None:
             model_identifier="model",
             model_revision="revision",
             backend_name="fake",
+            backend_version="fake-backend-v1",
+            preprocessing_contract_version=PREPROCESSING_CONTRACT_VERSION,
+            embedding_contract_version=EMBEDDING_CONTRACT_VERSION,
             device="cpu",
             input_sample_rate_hz=16000,
             input_samples=16000,
@@ -68,6 +75,104 @@ def test_valid_embedding_result_accepts_exact_phase4_dimension() -> None:
     assert result.is_valid
     assert result.embedding is not None
     assert result.embedding.shape == (192,)
+
+
+def test_embedding_metadata_contains_centralized_contract_versions() -> None:
+    metadata = _metadata()
+
+    assert metadata.preprocessing_contract_version == PREPROCESSING_CONTRACT_VERSION
+    assert metadata.embedding_contract_version == EMBEDDING_CONTRACT_VERSION
+    assert metadata.backend_version == "fake-backend-v1"
+    assert metadata.to_dict()["preprocessing_contract_version"] == "phase3-v1"
+    assert metadata.to_dict()["embedding_contract_version"] == "phase4b-v1"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "preprocessing_contract_version",
+        "embedding_contract_version",
+        "backend_version",
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "   ", b"version", True, 1, object()],
+)
+def test_embedding_metadata_rejects_malformed_version_fields(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match="non-empty string"):
+        replace(_metadata(), **{field: value})
+
+
+def test_backend_version_rejects_paths_and_oversized_values() -> None:
+    with pytest.raises(ValueError, match="safe version identifier"):
+        replace(_metadata(), backend_version="/Users/private/backend-v1")
+    with pytest.raises(ValueError, match="safe version identifier"):
+        replace(_metadata(), backend_version="v" * 129)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("preprocessing_contract_version", "phase3-v2"),
+        ("embedding_contract_version", "phase4b-v2"),
+    ],
+)
+def test_embedding_metadata_rejects_unknown_fixed_contract_versions(
+    field: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="not supported"):
+        replace(_metadata(), **{field: value})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "preprocessing_contract_version",
+        "embedding_contract_version",
+        "backend_version",
+    ],
+)
+def test_valid_result_rechecks_forged_metadata_versions(field: str) -> None:
+    metadata = _metadata()
+    object.__setattr__(metadata, field, "   ")
+
+    with pytest.raises(ValueError, match="non-empty string"):
+        SpeakerEmbeddingResult(
+            status=EmbeddingStatus.VALID,
+            embedding=_embedding(),
+            metadata=metadata,
+            errors=(),
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "preprocessing_contract_version",
+        "embedding_contract_version",
+        "backend_version",
+    ],
+)
+def test_forged_version_values_are_hidden_from_result_repr(field: str) -> None:
+    canary = "/Users/private/TOKEN_VERSION_CANARY"
+    result = SpeakerEmbeddingResult(
+        status=EmbeddingStatus.VALID,
+        embedding=_embedding(),
+        metadata=_metadata(),
+        errors=(),
+    )
+    assert result.metadata is not None
+    object.__setattr__(result.metadata, field, canary)
+
+    assert canary not in repr(result)
+    assert canary not in str(result)
+    with pytest.raises(ValueError):
+        result.to_dict()
 
 
 def test_invalid_embedding_result_has_no_partial_embedding_or_metadata() -> None:
@@ -175,6 +280,9 @@ def _metadata(*, embedding_dimension: int = 192) -> EmbeddingMetadata:
         model_identifier="model",
         model_revision="revision",
         backend_name="fake",
+        backend_version="fake-backend-v1",
+        preprocessing_contract_version=PREPROCESSING_CONTRACT_VERSION,
+        embedding_contract_version=EMBEDDING_CONTRACT_VERSION,
         device="cpu",
         input_sample_rate_hz=16000,
         input_samples=16000,

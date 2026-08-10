@@ -8,10 +8,12 @@ import numpy as np
 import pytest
 
 from voiceid.embeddings.backends.speechbrain_ecapa import (
+    SpeechBrainEcapaBackend,
     _extract_speechbrain_embedding,
 )
 from voiceid.embeddings.contracts import EmbeddingErrorCode
 from voiceid.embeddings.loader import EmbeddingModelError
+from voiceid.embeddings.policy import SPEECHBRAIN_ECAPA_BACKEND_VERSION
 
 
 class _FakeTensor:
@@ -26,6 +28,13 @@ class _FakeTensor:
 
     def numpy(self) -> np.ndarray:
         return self._array
+
+
+def test_speechbrain_backend_version_is_static_without_ml_import_or_network() -> None:
+    backend = SpeechBrainEcapaBackend(classifier=object())
+
+    assert backend.backend_version == SPEECHBRAIN_ECAPA_BACKEND_VERSION
+    assert backend.backend_version == "speechbrain-ecapa-adapter-v1"
 
 
 @pytest.mark.parametrize(
