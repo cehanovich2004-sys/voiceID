@@ -76,8 +76,10 @@ Completion criteria:
 
 ## Phase 5B: Experimental Calibration
 
-Status: Protocol/privacy prerequisite documented. Calibration implementation
-and execution have not started and require separate CTO approval.
+Status: Protocol/privacy prerequisite documented. Minimal executable
+calibration experiment-plan contracts are prepared in `voiceid.calibration`.
+Calibration tooling, metric computation, threshold selection, and execution
+have not started and require separate CTO approval.
 
 Prerequisite: processing provenance is explicitly versioned as `phase3-v1`,
 `phase4b-v1`, a backend adapter version, and comparison version `1`. This does
@@ -85,8 +87,8 @@ not start calibration work or select a threshold.
 
 Additional prerequisite: the experiment must follow
 `phase5b-experimental-calibration-protocol-v1` and the Phase 5B privacy/data
-governance plan before any executable contracts, dataset ingestion, calibration
-runner, or experiment execution is approved.
+governance plan before any dataset ingestion, calibration runner, metric
+implementation, or experiment execution is approved.
 
 Goal: evaluate score distributions on approved labeled data before considering
 any biometric decision policy.
@@ -101,7 +103,6 @@ Completion criteria:
 
 Current non-goals:
 
-- executable experiment contracts;
 - dataset acquisition or ingestion;
 - FAR/FRR/EER computation;
 - threshold selection;

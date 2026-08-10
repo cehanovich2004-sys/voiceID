@@ -14,7 +14,8 @@ deferred.
 
 Status: Phase 5A is complete and merged into `main`. Phase 5B calibration
 implementation and execution have not started. The repository now documents a
-Phase 5B protocol/privacy prerequisite for future CTO-approved work.
+Phase 5B protocol/privacy prerequisite and minimal experiment-plan contracts
+for future CTO-approved work.
 
 Implemented:
 
@@ -31,13 +32,14 @@ Implemented:
 - deterministic compatibility validation and error precedence;
 - smoke tests;
 - linting, formatting, type checking, and CI setup;
-- documentation and ADR-001 through ADR-006.
+- documentation and ADR-001 through ADR-006;
 - documentation-only Phase 5B experimental calibration protocol and privacy
-  plan.
+  plan;
+- minimal `voiceid.calibration` experiment-plan contracts.
 
 Not implemented yet:
 
-- executable Phase 5B experiment contracts or calibration tooling;
+- Phase 5B dataset ingestion, calibration tooling, or experiment execution;
 - biometric thresholds and identity verdicts;
 - API;
 - Streamlit UI.
@@ -236,14 +238,14 @@ phase5b-experimental-calibration-protocol-v1
 
 The Phase 5B protocol and privacy plan define research questions, genuine and
 impostor pair semantics, reference/probe separation, leakage controls,
-partitioning, metric semantics, privacy approval gates, and requirements for
-future experiment contracts.
+partitioning, metric semantics, and privacy approval gates.
 
-This documentation does not add executable experiment contracts, dataset
-ingestion, calibration runner, FAR/FRR/EER implementation, threshold selection,
-production decision policy, or real biometric data. Future PR B2 requires a
-separate CTO-approved API proposal before any Python experiment contracts are
-added.
+The `voiceid.calibration` package contains minimal executable contracts for a
+future calibration experiment plan: protocol identity, processing provenance,
+privacy-minimized sample records, pair records, and one trusted plan validation
+boundary. These contracts do not ingest datasets, run calibration, compute
+FAR/FRR/EER, select thresholds, return production decisions, serialize audit
+manifests, or store real biometric data.
 
 ## Quality Checks
 
@@ -283,6 +285,9 @@ voiceID/
 │       │   ├── preprocessing.py
 │       │   ├── validation_policy.py
 │       │   └── wav_reader.py
+│       ├── calibration/
+│       │   ├── __init__.py
+│       │   └── contracts.py
 │       ├── embeddings/
 │       │   ├── __init__.py
 │       │   ├── contracts.py
@@ -307,9 +312,11 @@ voiceID/
 ├── tests/
 │   ├── __init__.py
 │   ├── integration/
+│   │   ├── test_calibration_contracts.py
 │   │   ├── test_speaker_similarity.py
 │   │   └── test_speechbrain_ecapa.py
 │   ├── unit/
+│   │   ├── test_calibration_contracts.py
 │   │   ├── test_similarity_contracts.py
 │   │   └── test_speaker_similarity.py
 │   ├── test_audio_preprocessing.py
