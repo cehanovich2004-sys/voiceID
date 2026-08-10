@@ -1,7 +1,8 @@
 # Phase 5B Experimental Calibration Protocol
 
-Status: PR B1 documentation prerequisite. Calibration implementation and
-execution have not started.
+Status: protocol/privacy prerequisite documented. Calibration implementation
+and execution have not started. PR B2 adds minimal executable plan contracts
+for future CTO-reviewed calibration work; it does not execute calibration.
 
 Protocol identifier: `phase5b-experimental-calibration-protocol-v1`.
 
@@ -16,10 +17,12 @@ threshold selection, reporting code, or runtime identity decisions.
 - Privacy and data-governance requirements for future experiment work.
 - Requirements for future experiment contracts and validation boundaries.
 - Architecture decision record for the experiment boundary.
+- Minimal `voiceid.calibration` contracts for protocol identity, processing
+  provenance, sample records, pair records, experiment plans, and trusted plan
+  validation.
 
 ## Not Implemented
 
-- Executable experiment contracts.
 - Dataset acquisition, loader, ingestion pipeline, or manifest parser.
 - Calibration runner.
 - FAR, FRR, EER, ROC, DET, or confidence-interval computation.
@@ -30,12 +33,10 @@ threshold selection, reporting code, or runtime identity decisions.
 ## Future Approval Gates
 
 1. CTO approval of PR B1 protocol and privacy plan.
-2. Privacy/legal and dataset approval before any real data is obtained or used.
-3. Exact API proposal for PR B2 experiment contracts.
-4. CTO approval of the public contract shape.
-5. Separate implementation PR B2 for executable contracts.
-6. Separate approval for calibration tooling and experiment execution.
-7. Results review before any operating-point or threshold decision.
+2. CTO approval of PR B2 public experiment-plan contracts.
+3. Privacy/legal and dataset approval before any real data is obtained or used.
+4. Separate approval for calibration tooling and experiment execution.
+5. Results review before any operating-point or threshold decision.
 
 ## Research Question
 
@@ -269,11 +270,32 @@ that may be appropriate after approval:
 Exclusions must be counted and reported. They must not be selected after
 looking at score distributions.
 
-## Future Experiment Contracts Requirements
+## Calibration Contract Boundary
 
-PR B2 may introduce executable contracts only after CTO approval of the exact
-API shape. The names below describe responsibilities, not approved Python
-classes or modules.
+PR B2 introduces the approved minimal contract namespace
+`voiceid.calibration`.
+
+Public constants:
+
+- `CALIBRATION_PROTOCOL_IDENTIFIER`;
+- `CALIBRATION_CONTRACT_VERSION`.
+
+Public roles:
+
+- `CalibrationPartition`;
+- `CalibrationComparisonClass`;
+- `CalibrationProtocolIdentity`;
+- `CalibrationProcessingProvenance`;
+- `CalibrationSampleRecord`;
+- `CalibrationPairRecord`;
+- `CalibrationExperimentPlan`;
+- `validate_calibration_experiment_plan`.
+
+These contracts are declarative. They do not load datasets, generate pairs,
+read files, compute scores, calculate metrics, select thresholds, serialize
+audit manifests, or return identity decisions.
+
+Contract validation follows the existing VoiceID style:
 
 Future executable contracts must follow the existing VoiceID style:
 
@@ -298,8 +320,7 @@ Protocol identity record:
 - Forbidden data: filesystem paths, hostnames, speaker identifiers, secrets.
 - Boundary: constructed by trusted experiment orchestration, not raw caller
   input.
-- Open questions: whether this should be a standalone object or a field on an
-  experiment plan.
+- B2 shape: `CalibrationProtocolIdentity`.
 
 Sample manifest metadata:
 
@@ -311,8 +332,8 @@ Sample manifest metadata:
   experiment pseudonym namespace.
 - Boundary: validated from an approved manifest; caller-owned collections must
   be copied.
-- Open questions: exact required condition labels and manifest format require
-  privacy/legal and dataset approval.
+- B2 shape: `CalibrationSampleRecord` with pseudonymous sample, subject, source
+  group, and partition fields only.
 
 Comparison pair metadata:
 
@@ -323,39 +344,28 @@ Comparison pair metadata:
   is only a pair-plan record, audio, waveform, embedding, paths, speaker names.
 - Boundary: validated before score computation; forged contradictory pair state
   must fail closed.
-- Open questions: whether repeated/correlated-pair grouping should be explicit
-  in the pair contract or in reporting metadata.
+- B2 shape: `CalibrationPairRecord` with pair id, reference sample id, probe
+  sample id, comparison class, and partition.
 
-Reporting policy metadata:
+Out of scope for PR B2:
 
-- Need: preserve pre-declared reporting strata, exclusion handling, and
-  uncertainty requirements.
-- Allowed data: approved condition labels, aggregation policy, uncertainty
-  method name after approval.
-- Forbidden data: per-speaker public output by default, secrets, raw biometric
-  data, threshold values unless a later PR explicitly approves threshold
-  analysis artifacts.
-- Boundary: validated before experiment execution.
-- Open questions: exact uncertainty method and subgroup reporting rules require
-  experiment design approval.
+- reporting-policy contracts;
+- consent/audit-reference fields;
+- condition labels and strata;
+- correlation-group fields;
+- score records.
 
-## Future PR B2 Open API Decisions
+## Remaining Open API Decisions
 
-The following are intentionally unresolved until PR B2:
+The following remain unresolved after the minimal B2 contract layer:
 
-- Python module name and package export location, if any.
-- Whether protocol identity is a standalone contract or part of an experiment
-  plan contract.
-- Exact field names for pseudonymous subject/sample identifiers.
-- Whether partition roles and comparison classes are separate objects or enum
-  fields.
-- Whether score-level records are in scope for PR B2 or should wait for
-  calibration tooling.
-- Serialization shape and whether `to_dict()` is part of the public contract.
-- Stable error-code set for experiment-plan validation.
+- Whether score-level records belong in calibration tooling or a later
+  contracts PR.
+- Whether audit serialization should exist and which fields it may expose.
 - How repeated/correlated-comparison grouping should be represented.
 - Which approved condition labels are mandatory after dataset and privacy
   review.
+- Exact reporting-policy contract shape.
 
 ## Non-Decision Statement
 

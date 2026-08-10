@@ -4,7 +4,7 @@ Status: Proposed for PR B1 CTO review.
 
 ## Decision
 
-VoiceID will prepare Phase 5B calibration through a documentation-first PR B1
+VoiceID prepared Phase 5B calibration through a documentation-first PR B1
 before adding executable experiment contracts or tooling.
 
 PR B1 defines:
@@ -17,6 +17,11 @@ PR B1 defines:
 
 PR B1 does not add Python modules, dataclasses, runtime APIs, dataset loaders,
 metrics implementation, threshold selection, or identity decisions.
+
+PR B2 is the follow-up that adds only the minimal executable
+`voiceid.calibration` experiment-plan contracts. It still does not add dataset
+loaders, calibration execution, metric computation, threshold selection, or
+identity decisions.
 
 The future experiment must use the existing processing provenance from PR A:
 
@@ -39,17 +44,17 @@ the project touches real data or creates experiment execution code. It also
 avoids approving a public Python API before the dataset, privacy, reporting,
 and partition semantics are fully reviewed.
 
-Splitting PR B allows CTO review of the research protocol and governance plan
-without coupling it to executable contracts. Future PR B2 can then propose the
-minimal API shape with clearer requirements and fewer speculative abstractions.
+Splitting PR B allowed CTO review of the research protocol and governance plan
+without coupling it to executable contracts. PR B2 then narrows the first
+runtime-facing contract layer to the minimum approved plan metadata boundary.
 
 ## Consequences
 
-- Phase 5B is not complete after PR B1.
+- Phase 5B is not complete after PR B1 or PR B2.
 - No calibration is executed and no threshold is selected.
 - No public runtime API changes are introduced by PR B1.
-- Future PR B2 requires separate CTO approval for exact contract names,
-  fields, validation behavior, and package exports.
+- PR B2 requires separate CTO approval for exact contract names, fields,
+  validation behavior, and package exports.
 - Future calibration tooling requires another approval after contracts exist.
 - Version equality remains reproducibility metadata, not proof of biometric
   accuracy or legal compliance.
@@ -57,13 +62,15 @@ minimal API shape with clearer requirements and fewer speculative abstractions.
 
 ## Future Contract Direction
 
-Future contracts should be immutable, privacy-safe, and fail closed. They may
-need to represent protocol identity, approved sample manifest metadata,
-comparison pair metadata, partition roles, comparison class, provenance, and
-reporting policy.
+Future contracts should be immutable, privacy-safe, and fail closed. PR B2
+narrows the first executable layer to `voiceid.calibration` contracts for
+protocol identity, processing provenance, approved sample metadata, comparison
+pair metadata, partition roles, comparison class, experiment plans, and one
+trusted plan validation boundary.
 
-The exact Python module, class names, fields, and serialization shape are not
-approved by this ADR. They remain PR B2 design questions.
+PR B2 intentionally leaves reporting policy, score-level records, audit
+serialization, correlation grouping, dataset loading, calibration execution,
+metrics, and threshold selection for later approval gates.
 
 ## Non-Goals
 
@@ -79,6 +86,9 @@ PR B1 does not implement:
 - processing algorithm changes;
 - new dependencies;
 - real or synthetic biometric artifacts.
+
+PR B2 removes only the executable-contracts item from the future backlog by
+adding plan-only contracts. All other non-goals remain out of scope.
 
 ## Risks
 

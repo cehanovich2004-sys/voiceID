@@ -5,7 +5,8 @@
 No implementation phase is currently active. Phase 5A completed independent
 QA and CTO review and is merged into `main`. Phase 5B calibration
 implementation and execution have not started and require separate CTO
-approval.
+approval. The Phase 5B documentation prerequisite is complete, and a minimal
+calibration experiment-plan contract layer is available in `voiceid.calibration`.
 
 ## Completed Phases
 
@@ -40,22 +41,26 @@ approval.
   `phase5b-experimental-calibration-protocol-v1`, ADR-006, and the Phase 5B
   privacy/data-governance plan.
 - These prerequisites do not start Phase 5B evaluation tooling and introduce
-  no executable experiment contracts, dataset ingestion, calibration runner,
-  threshold, probability, or identity-decision API.
+  no dataset ingestion, calibration runner, threshold, probability, or
+  identity-decision API.
+- The `voiceid.calibration` namespace defines minimal plan-only executable
+  contracts and a trusted validation boundary. It does not execute
+  calibration, compute metrics, serialize audit manifests, or handle
+  biometric artifacts.
 - Enrollment storage does not exist, so no migration is required.
 
-## Phase 5B PR B1 Documentation Scope
+## Phase 5B Protocol And Contract Scope
 
 - Formal experimental calibration protocol is documented.
 - Privacy and data-governance requirements are documented.
 - Requirements for future experiment contracts are documented without
-  approving a Python API shape.
+  starting calibration execution.
 - Future approval gates are explicit: privacy/legal and dataset approval,
-  exact API proposal for PR B2, CTO approval of public contracts, separate PR
-  B2 implementation, and separate approval for calibration tooling/execution.
-- Phase 5B remains incomplete until executable contracts, approved data,
-  tooling, experiment execution, results review, and any operating-point
-  decision are separately approved.
+  CTO approval of public contracts, separate approval for calibration
+  tooling/execution, and results review before any operating-point decision.
+- Phase 5B remains incomplete until approved data, tooling, experiment
+  execution, results review, and any operating-point decision are separately
+  approved.
 
 ## Assumptions
 
@@ -86,6 +91,5 @@ approval.
 ## Next Step
 
 Phase 5B evaluation tooling remains unstarted. The next implementation step is
-not automatic: PR B2 requires a separate CTO-approved exact API proposal for
-experiment contracts, plus approved dataset, consent, privacy, evaluation, and
-architecture requirements.
+not automatic: calibration tooling requires separate CTO approval, plus
+approved dataset, consent, privacy, evaluation, and architecture requirements.
