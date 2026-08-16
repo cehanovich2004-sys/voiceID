@@ -37,6 +37,7 @@ from voiceid.calibration.contracts import (
     validate_calibration_experiment_plan,
 )
 from voiceid.calibration.reporting import (
+    FEASIBILITY_LABEL_CRITERIA_VERSION,
     FeasibilityReportSummary,
     ScoreDistribution,
     ScoreRecord,
@@ -75,7 +76,6 @@ from voiceid.similarity import (
     compare_speaker_embeddings,
 )
 
-FEASIBILITY_LABEL_CRITERIA_VERSION: Final = "phase5b-feasibility-label-v1"
 MIN_FEASIBILITY_SCORES_PER_CLASS: Final = 2
 PROMISING_MAX_EXPLORATORY_ERROR_RATE: Final = 0.10
 NOT_PROMISING_MIN_EXPLORATORY_ERROR_RATE: Final = 0.35

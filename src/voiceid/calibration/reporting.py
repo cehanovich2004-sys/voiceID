@@ -11,16 +11,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from voiceid.audio.preprocessing import PreprocessingErrorCode
 from voiceid.calibration.contracts import (
     CalibrationComparisonClass,
     CalibrationPartition,
 )
+from voiceid.embeddings.contracts import EmbeddingErrorCode
+from voiceid.similarity import SimilarityErrorCode
 
 PUBLIC_SCORE_DECIMALS: Final = 6
 HISTOGRAM_BINS: Final = 20
+FEASIBILITY_LABEL_CRITERIA_VERSION: Final = "phase5b-feasibility-label-v1"
 _ALLOWED_LABELS: Final = frozenset({"PROMISING", "INCONCLUSIVE", "NOT_PROMISING"})
-_SAFE_COUNT_CODE_CHARACTERS: Final = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._"
+_ALLOWED_INVALID_COUNT_CODES: Final = (
+    frozenset(f"preprocessing.{code.value}" for code in PreprocessingErrorCode)
+    | frozenset(f"embedding.{code.value}" for code in EmbeddingErrorCode)
+    | frozenset(f"similarity.{code.value}" for code in SimilarityErrorCode)
+    | frozenset(
+        {
+            "preprocessing.unknown",
+            "embedding.unknown",
+            "similarity.unknown",
+            "pair_excluded.missing_embedding",
+        }
+    )
 )
 
 
@@ -121,8 +135,7 @@ def _validate_summary(summary: FeasibilityReportSummary) -> None:
         raise ValueError("Invalid report summary.")
     if (
         type(summary.label_criteria_version) is not str
-        or not summary.label_criteria_version
-        or summary.label_criteria_version.strip() != summary.label_criteria_version
+        or summary.label_criteria_version != FEASIBILITY_LABEL_CRITERIA_VERSION
     ):
         raise ValueError("Invalid report summary.")
     for value in (
@@ -505,12 +518,9 @@ def _validate_invalid_counts(invalid_counts: Counter[str]) -> None:
     if type(invalid_counts) is not Counter:
         raise ValueError("Invalid report summary.")
     for code, count in invalid_counts.items():
-        if (
-            type(code) is not str
-            or not code
-            or code.strip() != code
-            or not set(code).issubset(_SAFE_COUNT_CODE_CHARACTERS)
-        ):
+        if type(code) is not str:
+            raise ValueError("Invalid report summary.")
+        if code not in _ALLOWED_INVALID_COUNT_CODES:
             raise ValueError("Invalid report summary.")
         _validate_count_int(count)
 

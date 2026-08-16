@@ -891,6 +891,207 @@ def test_summary_csv_revalidates_mutated_summary_fields_without_partial_write(
     assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
 
 
+@pytest.mark.parametrize("serializer", ("csv", "html"))
+def test_serializers_reject_forged_label_criteria_version_canary(
+    tmp_path: Path,
+    serializer: str,
+) -> None:
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "label_criteria_version",
+        "/Users/private/TOKEN_VERSION_PATH",
+    )
+
+    exc_info = _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer=serializer,
+    )
+
+    assert str(exc_info.value) == "Invalid report summary."
+    assert "TOKEN_VERSION_PATH" not in str(exc_info.value)
+    assert "/Users/private" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("serializer", ("csv", "html"))
+def test_serializers_reject_forged_invalid_count_token_canary(
+    tmp_path: Path,
+    serializer: str,
+) -> None:
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({"ghp_TOKEN_COUNT_SECRET_0123456789": 1}),
+    )
+
+    exc_info = _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer=serializer,
+    )
+
+    assert str(exc_info.value) == "Invalid report summary."
+    assert "TOKEN_COUNT_SECRET" not in str(exc_info.value)
+    assert "ghp_" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("serializer", ("csv", "html"))
+def test_serializers_reject_unknown_but_plausible_invalid_count_code(
+    tmp_path: Path,
+    serializer: str,
+) -> None:
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({"embedding.MODEL_TIMEOUT": 1}),
+    )
+
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer=serializer,
+    )
+
+
+@pytest.mark.parametrize("serializer", ("csv", "html"))
+def test_serializers_reject_invalid_count_str_subclass_and_malicious_key(
+    tmp_path: Path,
+    serializer: str,
+) -> None:
+    class StrSubclass(str):
+        pass
+
+    class MaliciousKey:
+        armed = False
+
+        def __hash__(self) -> int:
+            if self.armed:
+                raise AssertionError("hash should not be called during validation")
+            return 42
+
+        def __eq__(self, _other: object) -> bool:
+            raise AssertionError("eq should not be called during validation")
+
+        def __str__(self) -> str:
+            raise AssertionError("str should not be called during validation")
+
+        def __repr__(self) -> str:
+            raise AssertionError("repr should not be called during validation")
+
+    str_summary = _summary()
+    object.__setattr__(
+        str_summary,
+        "invalid_counts",
+        Counter({StrSubclass("embedding.unknown"): 1}),
+    )
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=str_summary,
+        serializer=serializer,
+    )
+
+    key = MaliciousKey()
+    malicious_counts: Counter[object] = Counter({key: 1})
+    key.armed = True
+    malicious_summary = _summary()
+    object.__setattr__(malicious_summary, "invalid_counts", malicious_counts)
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=malicious_summary,
+        serializer=serializer,
+    )
+
+
+@pytest.mark.parametrize(
+    "count",
+    (-1, True),
+)
+def test_serializers_reject_invalid_count_values_without_overwrite(
+    tmp_path: Path,
+    count: object,
+) -> None:
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({"embedding.unknown": count}),
+    )
+
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer="csv",
+    )
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer="html",
+    )
+
+
+def test_serializers_reject_invalid_count_int_subclass_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    class IntSubclass(int):
+        pass
+
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({"embedding.unknown": IntSubclass(1)}),
+    )
+
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer="csv",
+    )
+    _assert_summary_serializer_rejects_without_overwrite(
+        tmp_path=tmp_path,
+        summary=summary,
+        serializer="html",
+    )
+
+
+def test_all_allowed_invalid_count_codes_serialize_successfully(
+    tmp_path: Path,
+) -> None:
+    allowed_codes = tuple(
+        f"preprocessing.{code.value}" for code in feasibility.PreprocessingErrorCode
+    )
+    allowed_codes += tuple(f"embedding.{code.value}" for code in EmbeddingErrorCode)
+    allowed_codes += tuple(f"similarity.{code.value}" for code in SimilarityErrorCode)
+    allowed_codes += (
+        "preprocessing.unknown",
+        "embedding.unknown",
+        "similarity.unknown",
+        "pair_excluded.missing_embedding",
+    )
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({code: 1 for code in allowed_codes}),
+    )
+    csv_output = tmp_path / "summary.csv"
+    html_output = tmp_path / "report.html"
+
+    write_summary_csv(csv_output, summary)
+    write_html_report(
+        html_output,
+        summary=summary,
+        scores=(_score(1, CalibrationComparisonClass.GENUINE, 0.8),),
+        threshold_metrics=(ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1),),
+    )
+
+    assert "invalid_count.embedding.unknown,1" in csv_output.read_text(encoding="utf-8")
+    assert "pair_excluded.missing_embedding" in html_output.read_text(encoding="utf-8")
+
+
 def test_summary_csv_rejects_forged_invalid_counts_without_partial_write(
     tmp_path: Path,
 ) -> None:
@@ -1110,6 +1311,29 @@ def _summary() -> FeasibilityReportSummary:
         overlap_high=None,
         invalid_counts=Counter({"embedding.unknown": 1}),
     )
+
+
+def _assert_summary_serializer_rejects_without_overwrite(
+    *,
+    tmp_path: Path,
+    summary: FeasibilityReportSummary,
+    serializer: str,
+) -> pytest.ExceptionInfo[ValueError]:
+    output = tmp_path / f"{serializer}_summary_output"
+    original_bytes = b"SAFE_OLD_CONTENT"
+    output.write_bytes(original_bytes)
+    with pytest.raises(ValueError) as exc_info:
+        if serializer == "csv":
+            write_summary_csv(output, summary)
+        else:
+            write_html_report(
+                output,
+                summary=summary,
+                scores=(_score(1, CalibrationComparisonClass.GENUINE, 0.8),),
+                threshold_metrics=(ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1),),
+            )
+    assert output.read_bytes() == original_bytes
+    return exc_info
 
 
 def _forged_similarity_issue(code: str) -> SimilarityIssue:
