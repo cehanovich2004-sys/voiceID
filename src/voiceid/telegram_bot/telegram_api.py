@@ -6,6 +6,7 @@ import json
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 
@@ -29,8 +30,14 @@ class TelegramClient(Protocol):
     def answer_callback_query(self, *, callback_query_id: str) -> None:
         """Acknowledge an inline keyboard callback."""
 
-    def download_file(self, *, file_id: str) -> bytes:
-        """Download a Telegram file as bytes."""
+    def download_file(
+        self,
+        *,
+        file_id: str,
+        target_path: Path,
+        max_bytes: int,
+    ) -> None:
+        """Download a Telegram file to a local path with a hard byte limit."""
 
 
 class TelegramApiError(ValueError):
@@ -86,27 +93,56 @@ class TelegramApiClient:
             "answerCallbackQuery", {"callback_query_id": callback_query_id}
         )
 
-    def download_file(self, *, file_id: str) -> bytes:
+    def download_file(
+        self,
+        *,
+        file_id: str,
+        target_path: Path,
+        max_bytes: int,
+    ) -> None:
         result = self._request_json("getFile", {"file_id": file_id})
         if type(result) is not dict or type(result.get("file_path")) is not str:
             raise TelegramApiError
         file_path = str(result["file_path"])
         if not file_path or file_path.startswith("/") or ".." in file_path:
             raise TelegramApiError
+        failed = False
         try:
-            with urllib.request.urlopen(
-                f"{self._file_base_url}/{urllib.parse.quote(file_path)}",
-                timeout=self._request_timeout_seconds,
-            ) as response:
-                return cast(bytes, response.read())
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                urllib.request.urlopen(
+                    f"{self._file_base_url}/{urllib.parse.quote(file_path)}",
+                    timeout=self._request_timeout_seconds,
+                ) as response,
+                target_path.open("wb") as output,
+            ):
+                downloaded = 0
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        _unlink_safely(target_path)
+                        failed = True
+                        break
+                    output.write(cast(bytes, chunk))
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
-        except Exception as exc:
-            raise TelegramApiError from exc
+        except Exception:
+            _unlink_safely(target_path)
+            failed = True
+        if failed:
+            raise TelegramApiError
+        if not _is_telegram_voice_ogg(target_path):
+            _unlink_safely(target_path)
+            raise TelegramApiError
 
     def _request_json(self, method: str, params: Mapping[str, object]) -> object:
         data = urllib.parse.urlencode(params).encode("utf-8")
         request = urllib.request.Request(f"{self._base_url}/{method}", data=data)
+        failed = False
+        payload: object = None
         try:
             with urllib.request.urlopen(
                 request,
@@ -115,8 +151,26 @@ class TelegramApiClient:
                 payload = json.loads(response.read().decode("utf-8"))
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
-        except Exception as exc:
-            raise TelegramApiError from exc
+        except Exception:
+            failed = True
+        if failed:
+            raise TelegramApiError
         if type(payload) is not dict or payload.get("ok") is not True:
             raise TelegramApiError
         return payload.get("result")
+
+
+def _is_telegram_voice_ogg(path: Path) -> bool:
+    try:
+        with path.open("rb") as file_obj:
+            header = file_obj.read(4096)
+    except OSError:
+        return False
+    return header.startswith(b"OggS") and b"OpusHead" in header
+
+
+def _unlink_safely(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass

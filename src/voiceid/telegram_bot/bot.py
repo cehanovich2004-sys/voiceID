@@ -62,7 +62,8 @@ class TelegramVoiceCollectionBot:
                 return
             message = update.get("message")
             if type(message) is dict:
-                self._handle_message(cast(dict[str, Any], message))
+                update_id = _update_id(update)
+                self._handle_message(cast(dict[str, Any], message), update_id=update_id)
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
         except Exception:
@@ -94,7 +95,9 @@ class TelegramVoiceCollectionBot:
             self._store.decline(telegram_user_id)
             self._safe_send(chat_id, "Согласие не получено. Аудио не принимается.")
 
-    def _handle_message(self, message: dict[str, Any]) -> None:
+    def _handle_message(
+        self, message: dict[str, Any], *, update_id: int | None
+    ) -> None:
         chat_id = _chat_id_from_message(message)
         from_user = message.get("from")
         telegram_user_id = (
@@ -122,8 +125,16 @@ class TelegramVoiceCollectionBot:
             self._safe_send(chat_id, UNSUPPORTED_MESSAGE_TEXT)
             self._send_next_prompt(chat_id, session)
             return
+        message_id = _message_id(message)
+        if message_id is None:
+            self._safe_send(chat_id, GENERIC_ERROR_TEXT)
+            return
         self._handle_voice(
-            chat_id=chat_id, telegram_user_id=telegram_user_id, voice=voice
+            chat_id=chat_id,
+            telegram_user_id=telegram_user_id,
+            voice=voice,
+            message_id=message_id,
+            update_id=update_id,
         )
 
     def _handle_command(
@@ -142,13 +153,17 @@ class TelegramVoiceCollectionBot:
                     _progress_text(session),
                 )
         elif command == "/restart":
-            self._store.delete_user(telegram_user_id)
-            self._safe_send(
-                chat_id, "Незавершённая сессия удалена. Начните заново: /start."
-            )
+            if self._delete_user_safely(telegram_user_id):
+                self._safe_send(
+                    chat_id, "Незавершённая сессия удалена. Начните заново: /start."
+                )
+            else:
+                self._safe_send(chat_id, GENERIC_ERROR_TEXT)
         elif command == "/delete_me":
-            self._store.delete_user(telegram_user_id)
-            self._safe_send(chat_id, "Ваши локальные записи и состояние удалены.")
+            if self._delete_user_safely(telegram_user_id):
+                self._safe_send(chat_id, "Ваши локальные записи и состояние удалены.")
+            else:
+                self._safe_send(chat_id, GENERIC_ERROR_TEXT)
         else:
             self._safe_send(
                 chat_id, "Доступные команды: /start, /status, /restart, /delete_me."
@@ -160,7 +175,14 @@ class TelegramVoiceCollectionBot:
         chat_id: int,
         telegram_user_id: int,
         voice: dict[str, Any],
+        message_id: int,
+        update_id: int | None,
     ) -> None:
+        if self._store.has_processed_message(
+            telegram_user_id=telegram_user_id,
+            message_id=message_id,
+        ):
+            return
         if not self._voice_metadata_is_supported(voice):
             self._safe_send(chat_id, "Запись не подходит по длительности или размеру.")
             session = self._store.get_session(telegram_user_id)
@@ -174,16 +196,23 @@ class TelegramVoiceCollectionBot:
 
         reserved = self._store.reserve_sample(telegram_user_id)
         try:
-            reserved.ogg_path.parent.mkdir(parents=True, exist_ok=True)
-            reserved.ogg_path.write_bytes(self._client.download_file(file_id=file_id))
+            self._client.download_file(
+                file_id=file_id,
+                target_path=reserved.ogg_path,
+                max_bytes=self._config.max_voice_file_size_bytes,
+            )
             convert_ogg_to_wav(
                 source_ogg=reserved.ogg_path,
                 target_wav=reserved.wav_path,
                 ffmpeg_path=self._config.ffmpeg_path,
+                min_seconds=self._config.min_voice_seconds,
+                max_seconds=self._config.max_voice_seconds,
             )
-            session = self._store.commit_sample(
+            session, committed = self._store.commit_sample(
                 telegram_user_id=telegram_user_id,
                 reserved=reserved,
+                message_id=message_id,
+                update_id=update_id,
             )
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
@@ -196,6 +225,9 @@ class TelegramVoiceCollectionBot:
             self._safe_send(chat_id, GENERIC_ERROR_TEXT)
             return
 
+        if not committed:
+            _cleanup_reserved_sample(reserved)
+            return
         self._safe_send(
             chat_id,
             f"Запись принята. {_progress_text(session)}",
@@ -246,6 +278,15 @@ class TelegramVoiceCollectionBot:
         except Exception:
             pass
 
+    def _delete_user_safely(self, telegram_user_id: int) -> bool:
+        try:
+            self._store.delete_user(telegram_user_id)
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception:
+            return False
+        return True
+
 
 def _consent_keyboard() -> dict[str, object]:
     return {
@@ -274,6 +315,13 @@ def _chat_id_from_update(update: dict[str, Any]) -> int | None:
     return None
 
 
+def _update_id(update: dict[str, Any]) -> int | None:
+    update_id = update.get("update_id")
+    if type(update_id) is int and type(update_id) is not bool:
+        return update_id
+    return None
+
+
 def _chat_id_from_message(message: dict[str, Any]) -> int | None:
     chat = message.get("chat")
     if type(chat) is not dict:
@@ -281,6 +329,13 @@ def _chat_id_from_message(message: dict[str, Any]) -> int | None:
     chat_id = chat.get("id")
     if type(chat_id) is int and type(chat_id) is not bool:
         return chat_id
+    return None
+
+
+def _message_id(message: dict[str, Any]) -> int | None:
+    message_id = message.get("message_id")
+    if type(message_id) is int and type(message_id) is not bool:
+        return message_id
     return None
 
 

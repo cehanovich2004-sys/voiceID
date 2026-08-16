@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +48,7 @@ class ReservedSample:
 
     sample_id: str
     source_group_id: str
+    prompt_index: int
     ogg_path: Path
     wav_path: Path
 
@@ -100,6 +100,19 @@ class VoiceCollectionStore:
                         ogg_path TEXT NOT NULL,
                         wav_path TEXT NOT NULL,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(telegram_user_id)
+                            REFERENCES telegram_participants(telegram_user_id)
+                            ON DELETE CASCADE
+                        UNIQUE(telegram_user_id, prompt_index),
+                        UNIQUE(telegram_user_id, sample_id),
+                        UNIQUE(telegram_user_id, source_group_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS processed_voice_messages (
+                        telegram_user_id INTEGER NOT NULL,
+                        message_id INTEGER NOT NULL,
+                        update_id INTEGER,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY(telegram_user_id, message_id),
                         FOREIGN KEY(telegram_user_id)
                             REFERENCES telegram_participants(telegram_user_id)
                             ON DELETE CASCADE
@@ -191,23 +204,61 @@ class VoiceCollectionStore:
         return ReservedSample(
             sample_id=sample_id,
             source_group_id=source_group_id,
+            prompt_index=session.completed_samples + 1,
             ogg_path=sample_dir / "voice.ogg",
             wav_path=sample_dir / "voice.wav",
         )
+
+    def has_processed_message(self, *, telegram_user_id: int, message_id: int) -> bool:
+        """Return whether a Telegram voice message was already handled."""
+
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT 1 FROM processed_voice_messages
+                    WHERE telegram_user_id = ? AND message_id = ?
+                    """,
+                    (telegram_user_id, message_id),
+                ).fetchone()
+            return row is not None
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:
+            raise VoiceCollectionStoreError from exc
 
     def commit_sample(
         self,
         *,
         telegram_user_id: int,
         reserved: ReservedSample,
-    ) -> SessionSnapshot:
+        message_id: int,
+        update_id: int | None,
+    ) -> tuple[SessionSnapshot, bool]:
         """Persist a converted sample after the WAV has been verified."""
 
-        session = self.get_session(telegram_user_id)
-        if session is None or not session.accepted or session.is_complete:
-            raise VoiceCollectionStoreError
         try:
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT subject_id, accepted, required_samples
+                    FROM telegram_participants
+                    WHERE telegram_user_id = ?
+                    """,
+                    (telegram_user_id,),
+                ).fetchone()
+                if row is None or int(row["accepted"]) != 1:
+                    raise VoiceCollectionStoreError
+                if self._message_exists(
+                    connection,
+                    telegram_user_id=telegram_user_id,
+                    message_id=message_id,
+                ):
+                    return self._snapshot_from_connection(
+                        connection,
+                        telegram_user_id=telegram_user_id,
+                    ), False
                 connection.execute(
                     """
                     INSERT INTO voice_samples (
@@ -219,17 +270,36 @@ class VoiceCollectionStore:
                     (
                         telegram_user_id,
                         reserved.sample_id,
-                        session.subject_id,
+                        str(row["subject_id"]),
                         reserved.source_group_id,
                         CalibrationPartition.CALIBRATION.value,
-                        session.completed_samples + 1,
+                        reserved.prompt_index,
                         str(reserved.ogg_path),
                         str(reserved.wav_path),
                     ),
                 )
-            return self.get_session(telegram_user_id) or session
+                connection.execute(
+                    """
+                    INSERT INTO processed_voice_messages (
+                        telegram_user_id, message_id, update_id
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (telegram_user_id, message_id, update_id),
+                )
+                return self._snapshot_from_connection(
+                    connection,
+                    telegram_user_id=telegram_user_id,
+                ), True
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
+        except sqlite3.IntegrityError:
+            return self.get_session(telegram_user_id) or SessionSnapshot(
+                subject_id="",
+                accepted=False,
+                completed_samples=0,
+                required_samples=REQUIRED_RECORDINGS,
+            ), False
         except Exception as exc:
             raise VoiceCollectionStoreError from exc
 
@@ -237,8 +307,18 @@ class VoiceCollectionStore:
         """Delete local records and audio for one Telegram user."""
 
         try:
-            subject_ids = self._subject_ids_for_user(telegram_user_id)
+            file_paths, subject_ids = self._delete_targets_for_user(telegram_user_id)
+            for path in file_paths:
+                if path.exists():
+                    path.unlink()
+            for subject_id in subject_ids:
+                self._remove_empty_subject_tree(subject_id)
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "DELETE FROM processed_voice_messages WHERE telegram_user_id = ?",
+                    (telegram_user_id,),
+                )
                 connection.execute(
                     "DELETE FROM voice_samples WHERE telegram_user_id = ?",
                     (telegram_user_id,),
@@ -246,11 +326,6 @@ class VoiceCollectionStore:
                 connection.execute(
                     "DELETE FROM telegram_participants WHERE telegram_user_id = ?",
                     (telegram_user_id,),
-                )
-            for subject_id in subject_ids:
-                shutil.rmtree(
-                    self._data_dir / "audio" / subject_id,
-                    ignore_errors=True,
                 )
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
@@ -282,9 +357,20 @@ class VoiceCollectionStore:
         except Exception as exc:
             raise VoiceCollectionStoreError from exc
 
-    def _subject_ids_for_user(self, telegram_user_id: int) -> tuple[str, ...]:
+    def _delete_targets_for_user(
+        self,
+        telegram_user_id: int,
+    ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
         with self._connect() as connection:
-            rows = connection.execute(
+            file_rows = connection.execute(
+                """
+                SELECT ogg_path, wav_path
+                FROM voice_samples
+                WHERE telegram_user_id = ?
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+            subject_rows = connection.execute(
                 """
                 SELECT subject_id FROM telegram_participants WHERE telegram_user_id = ?
                 UNION
@@ -292,7 +378,67 @@ class VoiceCollectionStore:
                 """,
                 (telegram_user_id, telegram_user_id),
             ).fetchall()
-        return tuple(str(row["subject_id"]) for row in rows)
+        paths: list[Path] = []
+        for row in file_rows:
+            paths.append(Path(str(row["ogg_path"])))
+            paths.append(Path(str(row["wav_path"])))
+        return tuple(paths), tuple(str(row["subject_id"]) for row in subject_rows)
+
+    def _remove_empty_subject_tree(self, subject_id: str) -> None:
+        subject_root = self._data_dir / "audio" / subject_id
+        if not subject_root.exists():
+            return
+        for child in sorted(subject_root.rglob("*"), reverse=True):
+            if child.is_dir():
+                child.rmdir()
+        subject_root.rmdir()
+
+    def _message_exists(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        telegram_user_id: int,
+        message_id: int,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT 1 FROM processed_voice_messages
+            WHERE telegram_user_id = ? AND message_id = ?
+            """,
+            (telegram_user_id, message_id),
+        ).fetchone()
+        return row is not None
+
+    def _snapshot_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        telegram_user_id: int,
+    ) -> SessionSnapshot:
+        row = connection.execute(
+            """
+            SELECT subject_id, accepted, required_samples
+            FROM telegram_participants
+            WHERE telegram_user_id = ?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if row is None:
+            raise VoiceCollectionStoreError
+        count_row = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM voice_samples
+            WHERE telegram_user_id = ?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        return SessionSnapshot(
+            subject_id=str(row["subject_id"]),
+            accepted=bool(row["accepted"]),
+            completed_samples=int(count_row[0]),
+            required_samples=int(row["required_samples"]),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)

@@ -46,6 +46,12 @@ duration, excessive file size, download failures, conversion failures, and
 timeouts return generic public messages and allow the participant to repeat the
 current phrase.
 
+The Telegram download path does not trust declared `file_size`, MIME type, or
+filename extension. It streams the response in bounded chunks, stops as soon as
+the actual byte limit is exceeded, removes partial downloads, and accepts only
+content that matches the expected Telegram voice OGG/Opus container before WAV
+conversion.
+
 ## Local Storage
 
 Default data root:
@@ -75,6 +81,15 @@ Participant commands:
 - `/restart`: delete an unfinished local session and start over.
 - `/delete_me`: delete local records, audio files, manifest rows, and the
   Telegram-ID association for that user.
+
+Deletion is recoverable. If local file removal fails, the bot returns a generic
+failure and keeps the Telegram-ID mapping and manifest-source rows so the
+operator or participant can retry `/delete_me`. It only removes state after
+local files and manifest-source rows can be deleted consistently.
+
+Duplicate Telegram voice messages are tracked by message ID. Replayed updates
+after a process restart are no-ops, and database uniqueness prevents two
+parallel messages from filling the same prompt.
 
 Operator commands:
 
