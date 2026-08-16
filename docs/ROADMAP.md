@@ -93,6 +93,11 @@ implementation, or experiment execution is approved.
 Goal: evaluate score distributions on approved labeled data before considering
 any biometric decision policy.
 
+An opt-in feasibility probe may generate local exploratory score reports from
+an approved manifest and prepared offline model cache. This remains separate
+from calibration execution, metric validation, threshold selection, and
+production identity decisions.
+
 Completion criteria:
 
 - dataset, consent, privacy, and evaluation requirements are approved;

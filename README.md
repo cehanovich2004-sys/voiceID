@@ -247,6 +247,12 @@ boundary. These contracts do not ingest datasets, run calibration, compute
 FAR/FRR/EER, select thresholds, return production decisions, serialize audit
 manifests, or store real biometric data.
 
+An opt-in local feasibility probe is documented in
+`docs/PHASE5B_FEASIBILITY_PROBE.md`. It can turn an approved local JSON manifest
+and prepared offline model cache into exploratory CSV/HTML score reports. The
+reports use raw cosine similarity only; they do not produce probability,
+confidence, threshold recommendations, or biometric identity verdicts.
+
 ## Quality Checks
 
 Run the same checks locally that CI runs:
