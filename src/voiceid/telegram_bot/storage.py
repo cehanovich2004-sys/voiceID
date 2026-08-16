@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from voiceid.calibration import CalibrationPartition
+from voiceid.calibration import CalibrationPartition, CalibrationSampleRecord
 from voiceid.telegram_bot.config import REQUIRED_RECORDINGS
 from voiceid.telegram_bot.ids import new_sample_id, new_source_group_id, new_subject_id
 
@@ -116,6 +118,10 @@ class VoiceCollectionStore:
                         FOREIGN KEY(telegram_user_id)
                             REFERENCES telegram_participants(telegram_user_id)
                             ON DELETE CASCADE
+                    );
+                    CREATE TABLE IF NOT EXISTS managed_manifest_artifacts (
+                        manifest_path TEXT PRIMARY KEY,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     );
                     """
                 )
@@ -307,6 +313,7 @@ class VoiceCollectionStore:
         """Delete local records and audio for one Telegram user."""
 
         try:
+            self._rewrite_managed_manifests_excluding_user(telegram_user_id)
             file_paths, subject_ids = self._delete_targets_for_user(telegram_user_id)
             for path in file_paths:
                 if path.exists():
@@ -329,8 +336,34 @@ class VoiceCollectionStore:
                 )
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
-        except Exception as exc:
-            raise VoiceCollectionStoreError from exc
+        except Exception:
+            raise VoiceCollectionStoreError from None
+
+    def write_managed_manifest(
+        self,
+        *,
+        output_path: Path,
+        payload: dict[str, object],
+    ) -> Path:
+        """Atomically write and register a managed manifest artifact."""
+
+        try:
+            managed_path = self._canonical_managed_manifest_path(output_path)
+            _validate_manifest_payload(payload)
+            _write_json_atomic(managed_path, payload)
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO managed_manifest_artifacts (manifest_path)
+                    VALUES (?)
+                    """,
+                    (str(managed_path),),
+                )
+            return managed_path
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception:
+            raise VoiceCollectionStoreError from None
 
     def export_rows(self) -> tuple[sqlite3.Row, ...]:
         """Return completed local sample rows for manifest export."""
@@ -383,6 +416,47 @@ class VoiceCollectionStore:
             paths.append(Path(str(row["ogg_path"])))
             paths.append(Path(str(row["wav_path"])))
         return tuple(paths), tuple(str(row["subject_id"]) for row in subject_rows)
+
+    def _managed_manifest_paths(self) -> tuple[Path, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT manifest_path
+                FROM managed_manifest_artifacts
+                ORDER BY manifest_path
+                """
+            ).fetchall()
+        return tuple(
+            self._canonical_managed_manifest_path(Path(str(row["manifest_path"])))
+            for row in rows
+        )
+
+    def _rewrite_managed_manifests_excluding_user(self, telegram_user_id: int) -> None:
+        _, subject_ids = self._delete_targets_for_user(telegram_user_id)
+        if not subject_ids:
+            return
+        subject_set = frozenset(subject_ids)
+        for path in self._managed_manifest_paths():
+            _rewrite_manifest_without_subjects(path=path, subject_ids=subject_set)
+
+    def _canonical_managed_manifest_path(self, output_path: Path) -> Path:
+        manifest_dir = self._data_dir / "manifests"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        canonical_dir = manifest_dir.resolve(strict=True)
+        candidate = output_path
+        if not candidate.is_absolute():
+            candidate = manifest_dir / candidate
+        candidate_parent = candidate.parent.resolve(strict=False)
+        if candidate_parent != canonical_dir:
+            raise VoiceCollectionStoreError
+        if candidate.name in {"", ".", ".."} or not candidate.name.endswith(
+            ".manifest.json"
+        ):
+            raise VoiceCollectionStoreError
+        canonical = candidate.resolve(strict=False)
+        if canonical.parent != canonical_dir:
+            raise VoiceCollectionStoreError
+        return canonical
 
     def _remove_empty_subject_tree(self, subject_id: str) -> None:
         subject_root = self._data_dir / "audio" / subject_id
@@ -445,3 +519,103 @@ class VoiceCollectionStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+
+def _rewrite_manifest_without_subjects(
+    *,
+    path: Path,
+    subject_ids: frozenset[str],
+) -> None:
+    temp_path: Path | None = None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if type(payload) is not dict:
+            raise VoiceCollectionStoreError
+        samples = payload.get("samples")
+        if type(samples) is not list:
+            raise VoiceCollectionStoreError
+        rewritten_samples = []
+        for sample in samples:
+            if type(sample) is not dict:
+                raise VoiceCollectionStoreError
+            subject_id = sample.get("subject_id")
+            if type(subject_id) is str and subject_id in subject_ids:
+                continue
+            rewritten_samples.append(dict(sample))
+        rewritten = dict(payload)
+        rewritten["samples"] = rewritten_samples
+        _validate_manifest_payload(rewritten)
+        temp_path = _write_json_atomic(path, rewritten)
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception:
+        if temp_path is not None:
+            _unlink_temp_manifest(temp_path)
+        raise VoiceCollectionStoreError from None
+
+
+def _validate_manifest_payload(payload: dict[str, object]) -> None:
+    if type(payload) is not dict:
+        raise VoiceCollectionStoreError
+    if not set(payload).issubset({"repository_commit_sha", "samples", "thresholds"}):
+        raise VoiceCollectionStoreError
+    repository_commit_sha = payload.get("repository_commit_sha")
+    samples = payload.get("samples")
+    if type(repository_commit_sha) is not str or len(repository_commit_sha) != 40:
+        raise VoiceCollectionStoreError
+    if type(samples) is not list:
+        raise VoiceCollectionStoreError
+    for sample in samples:
+        if type(sample) is not dict:
+            raise VoiceCollectionStoreError
+        if set(sample) != {
+            "sample_id",
+            "subject_id",
+            "source_group_id",
+            "partition",
+            "wav_path",
+        }:
+            raise VoiceCollectionStoreError
+        if type(sample.get("wav_path")) is not str or not sample.get("wav_path"):
+            raise VoiceCollectionStoreError
+        CalibrationSampleRecord(
+            sample_id=sample["sample_id"],
+            subject_id=sample["subject_id"],
+            source_group_id=sample["source_group_id"],
+            partition=CalibrationPartition(sample["partition"]),
+        )
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            json.dump(payload, temp_file, ensure_ascii=False, indent=2, sort_keys=True)
+            temp_file.write("\n")
+            temp_file.flush()
+        if temp_path is None:
+            raise VoiceCollectionStoreError
+        temp_path.replace(path)
+        return temp_path
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception:
+        if temp_path is not None:
+            _unlink_temp_manifest(temp_path)
+        raise VoiceCollectionStoreError from None
+
+
+def _unlink_temp_manifest(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass

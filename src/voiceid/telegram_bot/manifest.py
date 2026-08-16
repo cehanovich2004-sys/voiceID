@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Final
@@ -46,18 +45,12 @@ def export_manifest_for_calibration(
             }
             for row in rows
         ]
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(
-                {
-                    "repository_commit_sha": repository_commit_sha,
-                    "samples": samples,
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
+        store.write_managed_manifest(
+            output_path=output_path,
+            payload={
+                "repository_commit_sha": repository_commit_sha,
+                "samples": samples,
+            },
         )
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise

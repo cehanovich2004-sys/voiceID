@@ -79,7 +79,7 @@ def test_full_six_recording_flow_exports_probe_manifest(
     assert any("Сбор завершён" in text for text in status_texts)
 
     store = _store(tmp_path)
-    manifest_path = tmp_path / "manifest.json"
+    manifest_path = _managed_manifest_path(tmp_path, "manifest")
     export_manifest_for_calibration(
         store=store,
         output_path=manifest_path,
@@ -339,7 +339,7 @@ def test_export_errors_are_generic_and_do_not_leak_paths(tmp_path: Path) -> None
     with pytest.raises(ValueError) as exc_info:
         export_manifest_for_calibration(
             store=store,
-            output_path=tmp_path / "manifest.json",
+            output_path=_managed_manifest_path(tmp_path, "manifest"),
             repository_commit_sha="/Users/private/TOKEN",
         )
 
@@ -373,7 +373,7 @@ def test_delete_me_removes_completed_samples_and_manifest_export(
     for index in range(REQUIRED_RECORDINGS):
         bot.process_update(_voice_update(message_id=1000 + index))
 
-    first_manifest = tmp_path / "before.manifest.json"
+    first_manifest = _managed_manifest_path(tmp_path, "before")
     export_manifest_for_calibration(
         store=_store(tmp_path),
         output_path=first_manifest,
@@ -382,7 +382,7 @@ def test_delete_me_removes_completed_samples_and_manifest_export(
     assert len(json.loads(first_manifest.read_text(encoding="utf-8"))["samples"]) == 6
 
     bot.process_update(_command_update("/delete_me"))
-    second_manifest = tmp_path / "after.manifest.json"
+    second_manifest = _managed_manifest_path(tmp_path, "after")
     export_manifest_for_calibration(
         store=_store(tmp_path),
         output_path=second_manifest,
@@ -392,6 +392,164 @@ def test_delete_me_removes_completed_samples_and_manifest_export(
     assert not list((tmp_path / "audio").rglob("*.ogg"))
     assert not list((tmp_path / "audio").rglob("*.wav"))
     assert _store(tmp_path).get_session(101) is None
+
+
+def test_delete_me_rewrites_managed_manifest_and_keeps_other_participants(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    deleted_subject = _complete_user(store, telegram_user_id=101, message_start=1000)
+    kept_subject = _complete_user(store, telegram_user_id=202, message_start=2000)
+    manifest_path = _managed_manifest_path(tmp_path, "managed")
+    export_manifest_for_calibration(
+        store=store,
+        output_path=manifest_path,
+        repository_commit_sha="a" * 40,
+    )
+    assert len(json.loads(manifest_path.read_text(encoding="utf-8"))["samples"]) == 12
+
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(client=client, store=store)
+    bot.process_update(_command_update("/delete_me"))
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert len(payload["samples"]) == 6
+    assert {sample["subject_id"] for sample in payload["samples"]} == {kept_subject}
+    assert deleted_subject not in json.dumps(payload)
+    _load_manifest(manifest_path)
+
+
+def test_delete_me_manifest_write_failure_is_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    _complete_user(store, telegram_user_id=101, message_start=1000)
+    manifest_path = _managed_manifest_path(tmp_path, "managed")
+    export_manifest_for_calibration(
+        store=store,
+        output_path=manifest_path,
+        repository_commit_sha="a" * 40,
+    )
+    original_bytes = manifest_path.read_bytes()
+    original_dump = json.dump
+    calls = 0
+
+    def flaky_dump(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("TOKEN_MANIFEST_WRITE_CANARY")
+        original_dump(*args, **kwargs)
+
+    monkeypatch.setattr(json, "dump", flaky_dump)
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(client=client, store=store)
+    bot.process_update(_command_update("/delete_me"))
+
+    assert "Не удалось обработать запись" in _last_text(client)
+    assert manifest_path.read_bytes() == original_bytes
+    assert _store(tmp_path).get_session(101) is not None
+    assert not list((tmp_path / "manifests").glob("*.tmp"))
+
+    monkeypatch.setattr(json, "dump", original_dump)
+    bot.process_update(_command_update("/delete_me"))
+    assert "удалены" in _last_text(client)
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["samples"] == []
+    assert _store(tmp_path).get_session(101) is None
+
+
+def test_delete_me_manifest_replace_failure_is_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    _complete_user(store, telegram_user_id=101, message_start=1000)
+    manifest_path = _managed_manifest_path(tmp_path, "managed")
+    export_manifest_for_calibration(
+        store=store,
+        output_path=manifest_path,
+        repository_commit_sha="a" * 40,
+    )
+    original_bytes = manifest_path.read_bytes()
+    original_replace = Path.replace
+    calls = 0
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("TOKEN_MANIFEST_REPLACE_CANARY")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(client=client, store=store)
+    bot.process_update(_command_update("/delete_me"))
+
+    assert "Не удалось обработать запись" in _last_text(client)
+    assert manifest_path.read_bytes() == original_bytes
+    assert _store(tmp_path).get_session(101) is not None
+    assert not list((tmp_path / "manifests").glob("*.tmp"))
+
+    monkeypatch.setattr(Path, "replace", original_replace)
+    bot.process_update(_command_update("/delete_me"))
+    assert "удалены" in _last_text(client)
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["samples"] == []
+
+
+def test_delete_me_rewrites_multiple_managed_manifests(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    _complete_user(store, telegram_user_id=101, message_start=1000)
+    manifests = [
+        _managed_manifest_path(tmp_path, "first"),
+        _managed_manifest_path(tmp_path, "second"),
+    ]
+    for manifest_path in manifests:
+        export_manifest_for_calibration(
+            store=store,
+            output_path=manifest_path,
+            repository_commit_sha="a" * 40,
+        )
+
+    TelegramVoiceCollectionBot(
+        client=FakeTelegramClient(),
+        store=store,
+    ).process_update(_command_update("/delete_me"))
+
+    for manifest_path in manifests:
+        assert json.loads(manifest_path.read_text(encoding="utf-8"))["samples"] == []
+
+
+def test_export_rejects_path_traversal_and_symlink_escape(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.initialize()
+    _complete_user(store, telegram_user_id=101, message_start=1000)
+
+    with pytest.raises(ValueError) as traversal:
+        export_manifest_for_calibration(
+            store=store,
+            output_path=tmp_path / "manifests" / ".." / "evil.manifest.json",
+            repository_commit_sha="a" * 40,
+        )
+    assert str(traversal.value) == "Manifest export failed."
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    symlink = tmp_path / "manifests" / "escape.manifest.json"
+    (tmp_path / "manifests").mkdir(exist_ok=True)
+    symlink.symlink_to(outside / "escape.manifest.json")
+    with pytest.raises(ValueError) as symlink_error:
+        export_manifest_for_calibration(
+            store=store,
+            output_path=symlink,
+            repository_commit_sha="a" * 40,
+        )
+    assert str(symlink_error.value) == "Manifest export failed."
 
 
 def test_delete_me_is_recoverable_after_file_failure(
@@ -549,6 +707,31 @@ def _store(tmp_path: Path) -> VoiceCollectionStore:
         db_path=tmp_path / "state" / "voice_collection.sqlite3",
         data_dir=tmp_path,
     )
+
+
+def _managed_manifest_path(tmp_path: Path, name: str) -> Path:
+    return tmp_path / "manifests" / f"{name}.manifest.json"
+
+
+def _complete_user(
+    store: VoiceCollectionStore,
+    *,
+    telegram_user_id: int,
+    message_start: int,
+) -> str:
+    session = store.accept(telegram_user_id)
+    for offset in range(REQUIRED_RECORDINGS):
+        reserved = store.reserve_sample(telegram_user_id)
+        reserved.ogg_path.parent.mkdir(parents=True, exist_ok=True)
+        reserved.ogg_path.write_bytes(b"OggS" + b"\x00" * 24 + b"OpusHead")
+        _write_wav(reserved.wav_path)
+        store.commit_sample(
+            telegram_user_id=telegram_user_id,
+            reserved=reserved,
+            message_id=message_start + offset,
+            update_id=message_start + offset,
+        )
+    return session.subject_id
 
 
 def _write_wav(path: Path, *, frames: int = 16000) -> None:

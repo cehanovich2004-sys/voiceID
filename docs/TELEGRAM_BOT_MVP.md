@@ -72,6 +72,24 @@ automatically create a `HOLDOUT` partition.
 `.env`, SQLite databases, OGG/Opus files, WAV files, M4A files, and local
 manifests are ignored by Git.
 
+Manifests created by the bot are managed artifacts and must be written only
+inside the bot-controlled export directory:
+
+```text
+<data-dir>/manifests
+```
+
+The export command rejects paths outside that directory, path traversal, and
+symlink escapes. During `/delete_me`, each managed manifest is rewritten
+atomically to remove that participant before the Telegram-ID recovery linkage is
+deleted. If any managed manifest cannot be rewritten, deletion returns a generic
+failure and can be safely retried.
+
+Manual manifest copies outside `<data-dir>/manifests` are not controlled by the
+bot. Operators must treat such copies as separate sensitive artifacts and delete
+or regenerate them according to the data-handling procedure; the bot does not
+scan the filesystem or modify unknown files.
+
 ## Commands
 
 Participant commands:
