@@ -85,6 +85,33 @@ Verify that the package imports:
 python -c "import voiceid; print(voiceid.__version__)"
 ```
 
+## Local Telegram Collection MVP
+
+VoiceID includes a local Telegram polling MVP for voluntary research collection.
+It collects six Telegram voice messages after explicit consent, converts them
+with local `ffmpeg` to mono PCM16 WAV at 16000 Hz, and exports a pseudonymous
+manifest for the existing feasibility probe.
+
+The bot is not production authentication. It does not return `MATCH` or
+`NO_MATCH`, select thresholds, store embeddings, or run model inference.
+
+```bash
+export TELEGRAM_BOT_TOKEN=""
+voiceid-telegram-bot run --data-dir ~/.local/share/voiceid/telegram_bot
+```
+
+Export a manifest after completed sessions:
+
+```bash
+voiceid-telegram-bot export-manifest \
+  ~/.local/share/voiceid/telegram_bot/manifests/first-test.manifest.json \
+  --data-dir ~/.local/share/voiceid/telegram_bot \
+  --repository-commit-sha "$(git rev-parse HEAD)"
+```
+
+See `docs/TELEGRAM_BOT_MVP.md` for the consent text, storage boundary,
+operator commands, and privacy constraints.
+
 ## WAV Validation
 
 Validate a local WAV file through the application service:

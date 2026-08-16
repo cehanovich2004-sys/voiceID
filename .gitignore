@@ -25,3 +25,16 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Local VoiceID collection artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.ogg
+*.opus
+*.wav
+*.m4a
+*.manifest.json
+voiceid_bot_data/
+local_voiceid_data/
+manifests/
