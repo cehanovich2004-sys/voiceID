@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import html
+import io
 import math
 from collections import Counter
 from dataclasses import dataclass
@@ -35,13 +36,7 @@ class ScoreRecord:
     def __post_init__(self) -> None:
         """Validate the privacy-safe score row contract."""
 
-        if type(self.row_index) is not int or self.row_index <= 0:
-            raise ValueError("Invalid report score row.")
-        if type(self.partition) is not CalibrationPartition:
-            raise ValueError("Invalid report score row.")
-        if type(self.comparison_class) is not CalibrationComparisonClass:
-            raise ValueError("Invalid report score row.")
-        _validate_score_float(self.score)
+        _validate_score_record(self)
 
     def __repr__(self) -> str:
         """Return a safe representation without row values."""
@@ -64,20 +59,7 @@ class ThresholdMetric:
     def __post_init__(self) -> None:
         """Validate threshold metric fields before report serialization."""
 
-        _validate_score_float(self.threshold)
-        _validate_rate_float(self.far)
-        _validate_rate_float(self.frr)
-        for value in (
-            self.false_accepts,
-            self.false_rejects,
-            self.impostor_total,
-            self.genuine_total,
-        ):
-            _validate_count_int(value)
-        if self.false_accepts > self.impostor_total:
-            raise ValueError("Invalid report threshold metric.")
-        if self.false_rejects > self.genuine_total:
-            raise ValueError("Invalid report threshold metric.")
+        _validate_threshold_metric(self)
 
     def __repr__(self) -> str:
         """Return a safe representation without metric values."""
@@ -98,19 +80,7 @@ class ScoreDistribution:
     def __post_init__(self) -> None:
         """Validate distribution fields before report serialization."""
 
-        _validate_count_int(self.count)
-        values = (self.minimum, self.maximum, self.mean, self.median)
-        if self.count == 0:
-            if values != (None, None, None, None):
-                raise ValueError("Invalid report distribution.")
-            return
-        for value in values:
-            if value is None:
-                raise ValueError("Invalid report distribution.")
-            _validate_score_float(value)
-        if self.minimum is not None and self.maximum is not None:
-            if self.minimum > self.maximum:
-                raise ValueError("Invalid report distribution.")
+        _validate_score_distribution(self)
 
     def __repr__(self) -> str:
         """Return a safe representation without distribution values."""
@@ -165,6 +135,8 @@ def _validate_summary(summary: FeasibilityReportSummary) -> None:
         raise ValueError("Invalid report summary.")
     if type(summary.impostor_distribution) is not ScoreDistribution:
         raise ValueError("Invalid report summary.")
+    _validate_score_distribution(summary.genuine_distribution)
+    _validate_score_distribution(summary.impostor_distribution)
     _validate_optional_score_float(summary.overlap_low)
     _validate_optional_score_float(summary.overlap_high)
     if (
@@ -179,22 +151,28 @@ def _validate_summary(summary: FeasibilityReportSummary) -> None:
 def write_score_csv(path: Path, scores: tuple[ScoreRecord, ...]) -> None:
     """Write per-score CSV without pair or sample identifiers."""
 
+    path.write_text(_render_score_csv(scores), encoding="utf-8")
+
+
+def _render_score_csv(scores: tuple[ScoreRecord, ...]) -> str:
     _validate_score_records(scores)
-    with path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=("row_index", "partition", "comparison_class", "score"),
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=("row_index", "partition", "comparison_class", "score"),
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for score in scores:
+        writer.writerow(
+            {
+                "row_index": score.row_index,
+                "partition": score.partition.value,
+                "comparison_class": score.comparison_class.value,
+                "score": _format_float(score.score),
+            }
         )
-        writer.writeheader()
-        for score in scores:
-            writer.writerow(
-                {
-                    "row_index": score.row_index,
-                    "partition": score.partition.value,
-                    "comparison_class": score.comparison_class.value,
-                    "score": _format_float(score.score),
-                }
-            )
+    return output.getvalue()
 
 
 def write_threshold_metrics_csv(
@@ -203,38 +181,48 @@ def write_threshold_metrics_csv(
 ) -> None:
     """Write exploratory threshold metrics CSV."""
 
+    path.write_text(_render_threshold_metrics_csv(metrics), encoding="utf-8")
+
+
+def _render_threshold_metrics_csv(metrics: tuple[ThresholdMetric, ...]) -> str:
     _validate_threshold_metrics(metrics)
-    with path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=(
-                "threshold",
-                "far",
-                "frr",
-                "false_accepts",
-                "false_rejects",
-                "impostor_total",
-                "genuine_total",
-            ),
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=(
+            "threshold",
+            "far",
+            "frr",
+            "false_accepts",
+            "false_rejects",
+            "impostor_total",
+            "genuine_total",
+        ),
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for metric in metrics:
+        writer.writerow(
+            {
+                "threshold": _format_float(metric.threshold),
+                "far": _format_float(metric.far),
+                "frr": _format_float(metric.frr),
+                "false_accepts": metric.false_accepts,
+                "false_rejects": metric.false_rejects,
+                "impostor_total": metric.impostor_total,
+                "genuine_total": metric.genuine_total,
+            }
         )
-        writer.writeheader()
-        for metric in metrics:
-            writer.writerow(
-                {
-                    "threshold": _format_float(metric.threshold),
-                    "far": _format_float(metric.far),
-                    "frr": _format_float(metric.frr),
-                    "false_accepts": metric.false_accepts,
-                    "false_rejects": metric.false_rejects,
-                    "impostor_total": metric.impostor_total,
-                    "genuine_total": metric.genuine_total,
-                }
-            )
+    return output.getvalue()
 
 
 def write_summary_csv(path: Path, summary: FeasibilityReportSummary) -> None:
     """Write key-value summary CSV without sensitive row-level fields."""
 
+    path.write_text(_render_summary_csv(summary), encoding="utf-8")
+
+
+def _render_summary_csv(summary: FeasibilityReportSummary) -> str:
     _validate_summary(summary)
     rows = [
         ("label", summary.label),
@@ -250,10 +238,11 @@ def write_summary_csv(path: Path, summary: FeasibilityReportSummary) -> None:
     for code, count in sorted(summary.invalid_counts.items()):
         rows.append((f"invalid_count.{code}", str(count)))
 
-    with path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(("key", "value"))
-        writer.writerows(rows)
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(("key", "value"))
+    writer.writerows(rows)
+    return output.getvalue()
 
 
 def write_html_report(
@@ -265,20 +254,37 @@ def write_html_report(
 ) -> None:
     """Write a static exploratory HTML report."""
 
+    path.write_text(
+        _render_html_report(
+            summary=summary,
+            scores=scores,
+            threshold_metrics=threshold_metrics,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _render_html_report(
+    *,
+    summary: FeasibilityReportSummary,
+    scores: tuple[ScoreRecord, ...],
+    threshold_metrics: tuple[ThresholdMetric, ...],
+) -> str:
     _validate_summary(summary)
     _validate_score_records(scores)
     _validate_threshold_metrics(threshold_metrics)
+    calibration_scores = _calibration_scores(scores)
     genuine_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.GENUINE
     )
     impostor_scores = tuple(
         score.score
-        for score in scores
+        for score in calibration_scores
         if score.comparison_class is CalibrationComparisonClass.IMPOSTOR
     )
-    document = f"""<!doctype html>
+    return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -301,14 +307,16 @@ def write_html_report(
   {_summary_table(summary)}
   <h2>Score Distributions</h2>
   {_distribution_table(summary)}
-  <h2>Histogram</h2>
+  <h2>CALIBRATION Histogram</h2>
+  <p class="note">
+    HOLDOUT scores are not used for exploratory metrics or label.
+  </p>
   {_histogram_table(genuine_scores, impostor_scores)}
   <h2>Exploratory Threshold Metrics</h2>
   {_threshold_table(threshold_metrics)}
 </body>
 </html>
 """
-    path.write_text(document, encoding="utf-8")
 
 
 def _summary_table(summary: FeasibilityReportSummary) -> str:
@@ -428,15 +436,69 @@ def _html(value: str) -> str:
 def _validate_score_records(scores: tuple[ScoreRecord, ...]) -> None:
     if type(scores) is not tuple:
         raise ValueError("Invalid report scores.")
-    if any(type(score) is not ScoreRecord for score in scores):
-        raise ValueError("Invalid report scores.")
+    for score in scores:
+        _validate_score_record(score)
 
 
 def _validate_threshold_metrics(metrics: tuple[ThresholdMetric, ...]) -> None:
     if type(metrics) is not tuple:
         raise ValueError("Invalid report threshold metrics.")
-    if any(type(metric) is not ThresholdMetric for metric in metrics):
-        raise ValueError("Invalid report threshold metrics.")
+    for metric in metrics:
+        _validate_threshold_metric(metric)
+
+
+def _validate_score_record(score: ScoreRecord) -> None:
+    if type(score) is not ScoreRecord:
+        raise ValueError("Invalid report score row.")
+    if type(score.row_index) is not int or score.row_index <= 0:
+        raise ValueError("Invalid report score row.")
+    if type(score.partition) is not CalibrationPartition:
+        raise ValueError("Invalid report score row.")
+    if type(score.comparison_class) is not CalibrationComparisonClass:
+        raise ValueError("Invalid report score row.")
+    _validate_score_float(score.score)
+
+
+def _validate_threshold_metric(metric: ThresholdMetric) -> None:
+    if type(metric) is not ThresholdMetric:
+        raise ValueError("Invalid report threshold metric.")
+    _validate_score_float(metric.threshold)
+    _validate_rate_float(metric.far)
+    _validate_rate_float(metric.frr)
+    for value in (
+        metric.false_accepts,
+        metric.false_rejects,
+        metric.impostor_total,
+        metric.genuine_total,
+    ):
+        _validate_count_int(value)
+    if metric.false_accepts > metric.impostor_total:
+        raise ValueError("Invalid report threshold metric.")
+    if metric.false_rejects > metric.genuine_total:
+        raise ValueError("Invalid report threshold metric.")
+
+
+def _validate_score_distribution(distribution: ScoreDistribution) -> None:
+    if type(distribution) is not ScoreDistribution:
+        raise ValueError("Invalid report distribution.")
+    _validate_count_int(distribution.count)
+    values = (
+        distribution.minimum,
+        distribution.maximum,
+        distribution.mean,
+        distribution.median,
+    )
+    if distribution.count == 0:
+        if values != (None, None, None, None):
+            raise ValueError("Invalid report distribution.")
+        return
+    for value in values:
+        if value is None:
+            raise ValueError("Invalid report distribution.")
+        _validate_score_float(value)
+    if distribution.minimum is not None and distribution.maximum is not None:
+        if distribution.minimum > distribution.maximum:
+            raise ValueError("Invalid report distribution.")
 
 
 def _validate_invalid_counts(invalid_counts: Counter[str]) -> None:
@@ -472,3 +534,9 @@ def _validate_score_float(value: float) -> None:
 def _validate_rate_float(value: float) -> None:
     if type(value) is not float or not math.isfinite(value) or not 0.0 <= value <= 1.0:
         raise ValueError("Invalid report rate.")
+
+
+def _calibration_scores(scores: tuple[ScoreRecord, ...]) -> tuple[ScoreRecord, ...]:
+    return tuple(
+        score for score in scores if score.partition is CalibrationPartition.CALIBRATION
+    )

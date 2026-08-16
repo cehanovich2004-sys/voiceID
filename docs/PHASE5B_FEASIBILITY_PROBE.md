@@ -101,7 +101,7 @@ The output directory contains:
 - `threshold_metrics.csv`: `CALIBRATION`-only exploratory threshold, FAR, FRR,
   and counts;
 - `summary.csv`: aggregate counts, overlap, invalid counts, final label;
-- `report.html`: static local report with summary, distributions, histogram,
+- `report.html`: static local report with summary, `CALIBRATION` histogram,
   and exploratory FAR/FRR table.
 
 Reports must not contain:

@@ -44,6 +44,9 @@ from voiceid.calibration.reporting import (
     ScoreRecord,
     ThresholdMetric,
     write_html_report,
+    write_score_csv,
+    write_summary_csv,
+    write_threshold_metrics_csv,
 )
 from voiceid.embeddings import (
     EMBEDDING_CONTRACT_VERSION,
@@ -343,6 +346,102 @@ def test_calibration_metrics_and_label_ignore_holdout_scores() -> None:
         combined_summary.impostor_distribution
         == calibration_summary.impostor_distribution
     )
+
+
+def test_calibration_html_histogram_ignores_many_holdout_variations(
+    tmp_path: Path,
+) -> None:
+    calibration_scores = (
+        _score(1, CalibrationComparisonClass.GENUINE, 0.9),
+        _score(2, CalibrationComparisonClass.GENUINE, 0.8),
+        _score(3, CalibrationComparisonClass.IMPOSTOR, -0.2),
+        _score(4, CalibrationComparisonClass.IMPOSTOR, -0.1),
+    )
+    holdout_scores = tuple(
+        _score(
+            index + 5,
+            (
+                CalibrationComparisonClass.GENUINE
+                if index % 2 == 0
+                else CalibrationComparisonClass.IMPOSTOR
+            ),
+            -1.0 + (index % 101) / 50.0,
+            partition=CalibrationPartition.HOLDOUT,
+        )
+        for index in range(101)
+    )
+    metrics = _calculate_threshold_metrics(calibration_scores, thresholds=(0.5,))
+    summary = _summarize_probe(
+        total_samples=105,
+        generated_pairs=105,
+        scores=calibration_scores + holdout_scores,
+        threshold_metrics=metrics,
+        invalid_counts=Counter(),
+    )
+    calibration_html = tmp_path / "calibration.html"
+    combined_html = tmp_path / "combined.html"
+
+    write_html_report(
+        calibration_html,
+        summary=summary,
+        scores=calibration_scores,
+        threshold_metrics=metrics,
+    )
+    write_html_report(
+        combined_html,
+        summary=summary,
+        scores=calibration_scores + holdout_scores,
+        threshold_metrics=metrics,
+    )
+
+    assert _calibration_histogram_section(
+        calibration_html.read_text(encoding="utf-8")
+    ) == _calibration_histogram_section(combined_html.read_text(encoding="utf-8"))
+    assert "HOLDOUT scores are not used for exploratory metrics or label" in (
+        combined_html.read_text(encoding="utf-8")
+    )
+
+
+def test_holdout_only_scores_do_not_fallback_to_calibration() -> None:
+    holdout_scores = (
+        _score(
+            1,
+            CalibrationComparisonClass.GENUINE,
+            0.9,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            2,
+            CalibrationComparisonClass.GENUINE,
+            0.8,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            3,
+            CalibrationComparisonClass.IMPOSTOR,
+            -0.2,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+        _score(
+            4,
+            CalibrationComparisonClass.IMPOSTOR,
+            -0.1,
+            partition=CalibrationPartition.HOLDOUT,
+        ),
+    )
+    metrics = _calculate_threshold_metrics(holdout_scores, thresholds=(0.5,))
+    summary = _summarize_probe(
+        total_samples=4,
+        generated_pairs=4,
+        scores=holdout_scores,
+        threshold_metrics=metrics,
+        invalid_counts=Counter(),
+    )
+
+    assert summary.label == "INCONCLUSIVE"
+    assert summary.genuine_distribution.count == 0
+    assert summary.impostor_distribution.count == 0
+    assert metrics == (ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 0, 0),)
 
 
 def test_label_requires_minimum_scores_per_class() -> None:
@@ -675,6 +774,180 @@ def test_html_report_rejects_forged_dynamic_payloads(
     assert not (tmp_path / "report.html").exists()
 
 
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    (
+        ("partition", "/Users/private/TOKEN_PARTITION_CANARY"),
+        ("comparison_class", "TOKEN_CLASS_CANARY"),
+        ("score", math.nan),
+        ("score", math.inf),
+        ("score", True),
+    ),
+)
+def test_score_csv_revalidates_mutated_score_record_without_partial_write(
+    tmp_path: Path,
+    field: str,
+    payload: object,
+) -> None:
+    score = _score(1, CalibrationComparisonClass.GENUINE, 0.8)
+    object.__setattr__(score, field, payload)
+    output = tmp_path / "scores.csv"
+    output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        write_score_csv(output, (score,))
+
+    assert "TOKEN" not in str(exc_info.value)
+    assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    (
+        ("threshold", math.nan),
+        ("threshold", math.inf),
+        ("threshold", True),
+        ("far", math.nan),
+        ("far", math.inf),
+        ("far", True),
+        ("frr", math.nan),
+        ("frr", math.inf),
+        ("frr", True),
+        ("false_accepts", True),
+        ("false_rejects", -1),
+        ("impostor_total", True),
+        ("genuine_total", -1),
+    ),
+)
+def test_threshold_csv_revalidates_mutated_metric_without_partial_write(
+    tmp_path: Path,
+    field: str,
+    payload: object,
+) -> None:
+    metric = ThresholdMetric(0.5, 0.0, 0.0, 0, 0, 1, 1)
+    object.__setattr__(metric, field, payload)
+    output = tmp_path / "threshold_metrics.csv"
+    output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        write_threshold_metrics_csv(output, (metric,))
+
+    assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    (
+        ("count", True),
+        ("minimum", math.nan),
+        ("maximum", math.inf),
+        ("mean", True),
+        ("median", -math.inf),
+    ),
+)
+def test_summary_csv_revalidates_mutated_nested_distribution_without_partial_write(
+    tmp_path: Path,
+    field: str,
+    payload: object,
+) -> None:
+    summary = _summary()
+    object.__setattr__(summary.genuine_distribution, field, payload)
+    output = tmp_path / "summary.csv"
+    output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        write_summary_csv(output, summary)
+
+    assert "TOKEN" not in str(exc_info.value)
+    assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    (
+        ("label", "TOKEN_LABEL_CANARY"),
+        ("label_criteria_version", True),
+        ("total_samples", True),
+        ("generated_pairs", -1),
+        ("evaluated_scores", True),
+        ("overlap_low", math.nan),
+        ("overlap_high", math.inf),
+    ),
+)
+def test_summary_csv_revalidates_mutated_summary_fields_without_partial_write(
+    tmp_path: Path,
+    field: str,
+    payload: object,
+) -> None:
+    summary = _summary()
+    object.__setattr__(summary, field, payload)
+    output = tmp_path / "summary.csv"
+    output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        write_summary_csv(output, summary)
+
+    assert "TOKEN" not in str(exc_info.value)
+    assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
+def test_summary_csv_rejects_forged_invalid_counts_without_partial_write(
+    tmp_path: Path,
+) -> None:
+    summary = _summary()
+    object.__setattr__(
+        summary,
+        "invalid_counts",
+        Counter({"<script>TOKEN_COUNT_CANARY</script>": True}),
+    )
+    output = tmp_path / "summary.csv"
+    output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        write_summary_csv(output, summary)
+
+    assert str(exc_info.value) == "Invalid report summary."
+    assert "TOKEN" not in str(exc_info.value)
+    assert output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
+def test_report_serializers_reject_forged_subclasses_without_partial_write(
+    tmp_path: Path,
+) -> None:
+    class ScoreRecordSubclass(ScoreRecord):
+        pass
+
+    class CounterSubclass(Counter[str]):
+        pass
+
+    with pytest.raises(ValueError):
+        ScoreRecordSubclass(
+            1,
+            CalibrationPartition.CALIBRATION,
+            CalibrationComparisonClass.GENUINE,
+            0.8,
+        )
+    score = object.__new__(ScoreRecordSubclass)
+    object.__setattr__(score, "row_index", 1)
+    object.__setattr__(score, "partition", CalibrationPartition.CALIBRATION)
+    object.__setattr__(score, "comparison_class", CalibrationComparisonClass.GENUINE)
+    object.__setattr__(score, "score", 0.8)
+    summary = _summary()
+    object.__setattr__(summary, "invalid_counts", CounterSubclass({"safe.code": 1}))
+    score_output = tmp_path / "scores.csv"
+    summary_output = tmp_path / "summary.csv"
+    score_output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+    summary_output.write_text("SAFE_OLD_CONTENT", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        write_score_csv(score_output, (score,))
+    with pytest.raises(ValueError):
+        write_summary_csv(summary_output, summary)
+
+    assert score_output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+    assert summary_output.read_text(encoding="utf-8") == "SAFE_OLD_CONTENT"
+
+
 def test_html_report_rejects_forged_mapping_subclass_and_bool_counts(
     tmp_path: Path,
 ) -> None:
@@ -804,6 +1077,12 @@ def _score(
         comparison_class=comparison_class,
         score=score,
     )
+
+
+def _calibration_histogram_section(document: str) -> str:
+    start = document.index("<h2>CALIBRATION Histogram</h2>")
+    end = document.index("<h2>Exploratory Threshold Metrics</h2>")
+    return document[start:end]
 
 
 def _summary() -> FeasibilityReportSummary:
