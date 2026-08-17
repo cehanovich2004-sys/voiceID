@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 import threading
 import wave
@@ -19,6 +20,7 @@ from voiceid.telegram_bot.identification import (
     IDENTIFICATION_MIN_MARGIN,
     IDENTIFICATION_POLICY_VERSION,
     IDENTIFICATION_THRESHOLD,
+    ExperimentalIdentifier,
     IdentificationResult,
     _verdict,
 )
@@ -358,6 +360,47 @@ def test_identification_policy_boundaries_are_versioned() -> None:
         _verdict(top_score=0.6, second_score=0.551, participant_code="P0001")
         == "AMBIGUOUS"
     )
+
+
+def test_identification_does_not_patch_global_socket(
+    tmp_path: Path,
+) -> None:
+    create_connection = socket.create_connection
+    socket_connect = socket.socket.connect
+    identifier = ExperimentalIdentifier(model_cache_dir=tmp_path)
+
+    result = identifier.identify(query_wav_path=tmp_path / "missing.wav", profiles=())
+
+    assert result.text == "IDENTIFICATION UNAVAILABLE"
+    assert socket.create_connection is create_connection
+    assert socket.socket.connect is socket_connect
+
+
+def test_poll_once_advances_offset_when_update_processing_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class OneUpdateClient:
+        def get_updates(
+            self, *, offset: int | None, timeout_seconds: int
+        ) -> list[dict[str, Any]]:
+            return [{"update_id": 777, "message": {"text": "/identify"}}]
+
+    class FailingBot:
+        def process_update(self, update: dict[str, Any]) -> None:
+            raise RuntimeError("TOKEN_CANARY_PATH_PAYLOAD")
+
+    caplog.set_level("WARNING", logger="voiceid.telegram_bot")
+
+    offset = _poll_once(
+        client=OneUpdateClient(),
+        bot=FailingBot(),
+        offset=10,
+        timeout_seconds=0,
+    )
+
+    assert offset == 778
+    assert "telegram_polling_error" in caplog.text
+    assert "TOKEN_CANARY" not in caplog.text
 
 
 def test_storage_recovers_after_restart(tmp_path: Path) -> None:

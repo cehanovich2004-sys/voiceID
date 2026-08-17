@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-import socket
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -100,7 +100,7 @@ class ExperimentalIdentifier:
     def _service(self) -> SpeakerEmbeddingService:
         if self._embedding_service is not None:
             return self._embedding_service
-        _disable_network()
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
         config = default_speechbrain_ecapa_config(
             cache_dir=self._model_cache_dir,
             offline=True,
@@ -169,11 +169,3 @@ def _verdict(
     if top_score - second_score < IDENTIFICATION_MIN_MARGIN:
         return "AMBIGUOUS"
     return f"IDENTIFIED: {participant_code}"
-
-
-def _disable_network() -> None:
-    def blocked(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("network disabled")
-
-    socket.create_connection = blocked  # type: ignore[assignment]
-    socket.socket.connect = blocked  # type: ignore[method-assign]

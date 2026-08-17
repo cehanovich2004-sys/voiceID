@@ -95,7 +95,12 @@ def _poll_once(
             update_id = update.get("update_id")
             if type(update_id) is int and type(update_id) is not bool:
                 next_offset = update_id + 1
-            bot.process_update(update)
+            try:
+                bot.process_update(update)
+            except (KeyboardInterrupt, SystemExit, MemoryError):
+                raise
+            except Exception:
+                _LOGGER.warning("telegram_polling_error")
         return next_offset
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise
