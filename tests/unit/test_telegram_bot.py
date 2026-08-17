@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 import threading
 import wave
@@ -14,7 +15,15 @@ from voiceid.calibration.feasibility import _load_manifest
 from voiceid.telegram_bot import REQUIRED_RECORDINGS
 from voiceid.telegram_bot.audio import AudioConversionError, convert_ogg_to_wav
 from voiceid.telegram_bot.bot import BotRuntimeConfig, TelegramVoiceCollectionBot
-from voiceid.telegram_bot.cli import _poll_once
+from voiceid.telegram_bot.cli import _parse_operator_ids, _poll_once
+from voiceid.telegram_bot.identification import (
+    IDENTIFICATION_MIN_MARGIN,
+    IDENTIFICATION_POLICY_VERSION,
+    IDENTIFICATION_THRESHOLD,
+    ExperimentalIdentifier,
+    IdentificationResult,
+    _verdict,
+)
 from voiceid.telegram_bot.manifest import export_manifest_for_calibration
 from voiceid.telegram_bot.storage import VoiceCollectionStore
 from voiceid.telegram_bot.telegram_api import TelegramApiClient, TelegramApiError
@@ -188,6 +197,212 @@ def test_status_does_not_disclose_identifiers_or_paths(tmp_path: Path) -> None:
     assert str(tmp_path) not in text
 
 
+def test_participant_codes_are_stable_and_not_exported(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    first_subject = _complete_user(
+        store,
+        telegram_user_id=101,
+        message_start=1000,
+    )
+    second_subject = _complete_user(
+        store,
+        telegram_user_id=202,
+        message_start=2000,
+    )
+
+    assert first_subject != second_subject
+    assert store.get_participant_code(101) == "P0001"
+    assert store.get_participant_code(202) == "P0002"
+    store.initialize()
+    assert store.get_participant_code(101) == "P0001"
+    store.delete_user(101)
+    _complete_user(store, telegram_user_id=303, message_start=3000)
+    assert store.get_participant_code(303) == "P0003"
+
+    manifest_path = _managed_manifest_path(tmp_path, "codes")
+    export_manifest_for_calibration(
+        store=store,
+        output_path=manifest_path,
+        repository_commit_sha="a" * 40,
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert all("participant_code" not in sample for sample in payload["samples"])
+    _load_manifest(manifest_path)
+
+
+def test_my_code_and_whoami_return_only_callers_values(tmp_path: Path) -> None:
+    client, bot = _bot(tmp_path)
+    bot.process_update(_consent_update())
+
+    bot.process_update(_command_update("/my_code"))
+    bot.process_update(_command_update("/whoami"))
+
+    assert _all_text(client).count("P0001") >= 1
+    assert "sub_" not in _all_text(client)
+    assert "101" in _last_text(client)
+
+
+def test_identify_requires_authorized_private_operator(
+    tmp_path: Path,
+) -> None:
+    client, bot = _bot(tmp_path, operator_ids=frozenset({101}))
+
+    bot.process_update(_command_update("/identify"))
+    bot.process_update(_operator_command_update("/identify", chat_id=999))
+    bot.process_update(_operator_command_update("/identify"))
+
+    assert client.messages[0][1] == "Not authorized."
+    assert client.messages[1][1] == "Not authorized."
+    assert (
+        client.messages[2][1]
+        == "Send one voice message for experimental identification."
+    )
+
+
+def test_operator_allowlist_parser_fails_closed() -> None:
+    assert _parse_operator_ids(None) == frozenset()
+    assert _parse_operator_ids("") == frozenset()
+    assert _parse_operator_ids("101,202") == frozenset({101, 202})
+    assert _parse_operator_ids("101,abc") == frozenset()
+    assert _parse_operator_ids("0") == frozenset()
+    assert _parse_operator_ids("-1") == frozenset()
+
+
+def test_identify_returns_safe_outcome_and_does_not_create_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _complete_user(store, telegram_user_id=201, message_start=2000)
+    _complete_user(store, telegram_user_id=202, message_start=3000)
+    identifier = _FakeIdentifier("IDENTIFIED: P0001")
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(
+        client=client,
+        store=store,
+        operator_ids=frozenset({101}),
+        identifier=identifier,
+    )
+    monkeypatch.setattr("voiceid.telegram_bot.bot.convert_ogg_to_wav", _fake_convert)
+
+    bot.process_update(_operator_command_update("/identify"))
+    bot.process_update(_operator_voice_update(message_id=900, update_id=901))
+
+    assert _last_text(client) == "IDENTIFIED: P0001"
+    assert identifier.calls == 1
+    assert not list((tmp_path / "tmp").rglob("*"))
+    assert len(store.export_rows()) == REQUIRED_RECORDINGS * 2
+
+
+def test_identify_duplicate_query_is_noop_after_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _complete_user(store, telegram_user_id=201, message_start=2000)
+    _complete_user(store, telegram_user_id=202, message_start=3000)
+    identifier = _FakeIdentifier("UNKNOWN")
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(
+        client=client,
+        store=store,
+        operator_ids=frozenset({101}),
+        identifier=identifier,
+    )
+    monkeypatch.setattr("voiceid.telegram_bot.bot.convert_ogg_to_wav", _fake_convert)
+
+    bot.process_update(_operator_command_update("/identify"))
+    update = _operator_voice_update(message_id=900, update_id=901)
+    bot.process_update(update)
+    bot.process_update(_operator_command_update("/identify"))
+    bot.process_update(update)
+
+    assert identifier.calls == 1
+    assert [message[1] for message in client.messages].count("UNKNOWN") == 1
+
+
+def test_identify_unavailable_with_one_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _complete_user(store, telegram_user_id=201, message_start=2000)
+    client = FakeTelegramClient()
+    bot = TelegramVoiceCollectionBot(
+        client=client,
+        store=store,
+        operator_ids=frozenset({101}),
+        identifier=_FakeIdentifier("IDENTIFICATION UNAVAILABLE"),
+    )
+    monkeypatch.setattr("voiceid.telegram_bot.bot.convert_ogg_to_wav", _fake_convert)
+
+    bot.process_update(_operator_command_update("/identify"))
+    bot.process_update(_operator_voice_update(message_id=900, update_id=901))
+
+    assert _last_text(client) == "IDENTIFICATION UNAVAILABLE"
+
+
+def test_identification_policy_boundaries_are_versioned() -> None:
+    assert IDENTIFICATION_POLICY_VERSION == "telegram-identification-policy-v1"
+    assert IDENTIFICATION_THRESHOLD == 0.4
+    assert IDENTIFICATION_MIN_MARGIN == 0.05
+    assert (
+        _verdict(top_score=0.4, second_score=0.35, participant_code="P0001")
+        == "IDENTIFIED: P0001"
+    )
+    assert (
+        _verdict(top_score=0.39, second_score=0.1, participant_code="P0001")
+        == "UNKNOWN"
+    )
+    assert (
+        _verdict(top_score=0.6, second_score=0.551, participant_code="P0001")
+        == "AMBIGUOUS"
+    )
+
+
+def test_identification_does_not_patch_global_socket(
+    tmp_path: Path,
+) -> None:
+    create_connection = socket.create_connection
+    socket_connect = socket.socket.connect
+    identifier = ExperimentalIdentifier(model_cache_dir=tmp_path)
+
+    result = identifier.identify(query_wav_path=tmp_path / "missing.wav", profiles=())
+
+    assert result.text == "IDENTIFICATION UNAVAILABLE"
+    assert socket.create_connection is create_connection
+    assert socket.socket.connect is socket_connect
+
+
+def test_poll_once_advances_offset_when_update_processing_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class OneUpdateClient:
+        def get_updates(
+            self, *, offset: int | None, timeout_seconds: int
+        ) -> list[dict[str, Any]]:
+            return [{"update_id": 777, "message": {"text": "/identify"}}]
+
+    class FailingBot:
+        def process_update(self, update: dict[str, Any]) -> None:
+            raise RuntimeError("TOKEN_CANARY_PATH_PAYLOAD")
+
+    caplog.set_level("WARNING", logger="voiceid.telegram_bot")
+
+    offset = _poll_once(
+        client=OneUpdateClient(),
+        bot=FailingBot(),
+        offset=10,
+        timeout_seconds=0,
+    )
+
+    assert offset == 778
+    assert "telegram_polling_error" in caplog.text
+    assert "TOKEN_CANARY" not in caplog.text
+
+
 def test_storage_recovers_after_restart(tmp_path: Path) -> None:
     client, bot = _bot(tmp_path)
     bot.process_update(_consent_update())
@@ -200,7 +415,7 @@ def test_storage_recovers_after_restart(tmp_path: Path) -> None:
     )
     restarted_bot.process_update(_command_update("/status"))
 
-    assert "Прогресс: 0/6." == _last_text(restarted_client)
+    assert "Прогресс: 0/6. Код: P0001." == _last_text(restarted_client)
 
 
 def test_convert_ogg_to_wav_uses_safe_ffmpeg_args_and_timeout(
@@ -695,11 +910,19 @@ def test_network_exception_does_not_keep_sensitive_cause(
     assert "TOKEN_NET_CANARY" not in str(exc_info.value)
 
 
-def _bot(tmp_path: Path) -> tuple[FakeTelegramClient, TelegramVoiceCollectionBot]:
+def _bot(
+    tmp_path: Path,
+    *,
+    operator_ids: frozenset[int] = frozenset(),
+) -> tuple[FakeTelegramClient, TelegramVoiceCollectionBot]:
     store = _store(tmp_path)
     store.initialize()
     client = FakeTelegramClient()
-    return client, TelegramVoiceCollectionBot(client=client, store=store)
+    return client, TelegramVoiceCollectionBot(
+        client=client,
+        store=store,
+        operator_ids=operator_ids,
+    )
 
 
 def _store(tmp_path: Path) -> VoiceCollectionStore:
@@ -719,6 +942,7 @@ def _complete_user(
     telegram_user_id: int,
     message_start: int,
 ) -> str:
+    store.initialize()
     session = store.accept(telegram_user_id)
     for offset in range(REQUIRED_RECORDINGS):
         reserved = store.reserve_sample(telegram_user_id)
@@ -779,6 +1003,16 @@ def _command_update(text: str) -> dict[str, Any]:
     }
 
 
+def _operator_command_update(text: str, *, chat_id: int = 101) -> dict[str, Any]:
+    return {
+        "message": {
+            "chat": {"id": chat_id},
+            "from": {"id": 101},
+            "text": text,
+        }
+    }
+
+
 def _text_update(text: str) -> dict[str, Any]:
     return {
         "message": {
@@ -806,6 +1040,28 @@ def _voice_update(
                 "duration": duration,
                 "file_size": file_size,
                 "file_id": "telegram-file-id",
+            },
+        },
+    }
+
+
+def _operator_voice_update(
+    *,
+    duration: int = 3,
+    file_size: int = 1024,
+    update_id: int = 901,
+    message_id: int = 900,
+) -> dict[str, Any]:
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": message_id,
+            "chat": {"id": 101},
+            "from": {"id": 101},
+            "voice": {
+                "duration": duration,
+                "file_size": file_size,
+                "file_id": "operator-file-id",
             },
         },
     }
@@ -845,3 +1101,13 @@ class _BytesResponse:
 
     def read(self, size: int = -1) -> bytes:
         return self._stream.read(size)
+
+
+class _FakeIdentifier:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.calls = 0
+
+    def identify(self, **kwargs: object) -> IdentificationResult:
+        self.calls += 1
+        return IdentificationResult(self._text)

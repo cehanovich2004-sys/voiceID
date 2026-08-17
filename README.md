@@ -92,12 +92,18 @@ It collects six Telegram voice messages after explicit consent, converts them
 with local `ffmpeg` to mono PCM16 WAV at 16000 Hz, and exports a pseudonymous
 manifest for the existing feasibility probe.
 
-The bot is not production authentication. It does not return `MATCH` or
-`NO_MATCH`, select thresholds, store embeddings, or run model inference.
+The bot is not production authentication. Its operator-only `/identify`
+workflow is an exploratory local smoke-test feature that can return only
+`IDENTIFIED: Pxxxx`, `UNKNOWN`, `AMBIGUOUS`, `INVALID AUDIO`, or
+`IDENTIFICATION UNAVAILABLE`; it does not return `MATCH` or `NO_MATCH`, expose
+scores, select production thresholds, or persist embeddings.
 
 ```bash
 export TELEGRAM_BOT_TOKEN=""
-voiceid-telegram-bot run --data-dir ~/.local/share/voiceid/telegram_bot
+export VOICEID_TELEGRAM_OPERATOR_IDS=""
+voiceid-telegram-bot run \
+  --data-dir ~/.local/share/voiceid/telegram_bot \
+  --model-cache-dir ~/.cache/voiceid/speechbrain_ecapa
 ```
 
 Export a manifest after completed sessions:

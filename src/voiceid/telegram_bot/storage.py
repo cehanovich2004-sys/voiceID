@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from voiceid.calibration import CalibrationPartition, CalibrationSampleRecord
 from voiceid.telegram_bot.config import REQUIRED_RECORDINGS
 from voiceid.telegram_bot.ids import new_sample_id, new_source_group_id, new_subject_id
+
+_PARTICIPANT_CODE_RE: Final = re.compile(r"^P[0-9]{4}$")
+_MAX_PARTICIPANT_CODE: Final = 9999
 
 
 class VoiceCollectionStoreError(ValueError):
@@ -25,6 +30,7 @@ class SessionSnapshot:
     """Privacy-safe progress snapshot for one Telegram participant."""
 
     subject_id: str
+    participant_code: str | None
     accepted: bool
     completed_samples: int
     required_samples: int
@@ -56,6 +62,28 @@ class ReservedSample:
 
     def __repr__(self) -> str:
         return "ReservedSample(redacted=True)"
+
+
+@dataclass(frozen=True, slots=True)
+class EnrollmentSample:
+    """Internal completed enrollment sample path for operator identification."""
+
+    prompt_index: int
+    wav_path: Path
+
+    def __repr__(self) -> str:
+        return "EnrollmentSample(redacted=True)"
+
+
+@dataclass(frozen=True, slots=True)
+class EnrollmentProfile:
+    """Internal completed profile candidate for exploratory identification."""
+
+    participant_code: str
+    samples: tuple[EnrollmentSample, ...]
+
+    def __repr__(self) -> str:
+        return "EnrollmentProfile(redacted=True)"
 
 
 class VoiceCollectionStore:
@@ -123,8 +151,31 @@ class VoiceCollectionStore:
                         manifest_path TEXT PRIMARY KEY,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     );
+                    CREATE TABLE IF NOT EXISTS participant_code_reservations (
+                        participant_code TEXT PRIMARY KEY,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE IF NOT EXISTS participant_codes (
+                        telegram_user_id INTEGER PRIMARY KEY,
+                        subject_id TEXT NOT NULL UNIQUE,
+                        participant_code TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(telegram_user_id)
+                            REFERENCES telegram_participants(telegram_user_id)
+                            ON DELETE CASCADE,
+                        FOREIGN KEY(participant_code)
+                            REFERENCES participant_code_reservations(participant_code)
+                    );
+                    CREATE TABLE IF NOT EXISTS processed_identification_messages (
+                        telegram_user_id INTEGER NOT NULL,
+                        message_id INTEGER NOT NULL,
+                        update_id INTEGER,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY(telegram_user_id, message_id)
+                    );
                     """
                 )
+                self._migrate_participant_codes(connection)
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
         except Exception as exc:
@@ -137,9 +188,12 @@ class VoiceCollectionStore:
             with self._connect() as connection:
                 row = connection.execute(
                     """
-                    SELECT subject_id, accepted, required_samples
-                    FROM telegram_participants
-                    WHERE telegram_user_id = ?
+                    SELECT p.subject_id, c.participant_code, p.accepted,
+                           p.required_samples
+                    FROM telegram_participants p
+                    LEFT JOIN participant_codes c
+                        ON c.telegram_user_id = p.telegram_user_id
+                    WHERE p.telegram_user_id = ?
                     """,
                     (telegram_user_id,),
                 ).fetchone()
@@ -155,6 +209,11 @@ class VoiceCollectionStore:
                 ).fetchone()
             return SessionSnapshot(
                 subject_id=str(row["subject_id"]),
+                participant_code=(
+                    str(row["participant_code"])
+                    if row["participant_code"] is not None
+                    else None
+                ),
                 accepted=bool(row["accepted"]),
                 completed_samples=int(count_row[0]),
                 required_samples=int(row["required_samples"]),
@@ -173,6 +232,7 @@ class VoiceCollectionStore:
                 return current
             subject_id = new_subject_id()
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     """
                     INSERT OR REPLACE INTO telegram_participants (
@@ -182,8 +242,14 @@ class VoiceCollectionStore:
                     """,
                     (telegram_user_id, subject_id, REQUIRED_RECORDINGS),
                 )
+                self._assign_participant_code(
+                    connection,
+                    telegram_user_id=telegram_user_id,
+                    subject_id=subject_id,
+                )
             return self.get_session(telegram_user_id) or SessionSnapshot(
                 subject_id=subject_id,
+                participant_code=None,
                 accepted=True,
                 completed_samples=0,
                 required_samples=REQUIRED_RECORDINGS,
@@ -215,6 +281,83 @@ class VoiceCollectionStore:
             wav_path=sample_dir / "voice.wav",
         )
 
+    def get_participant_code(self, telegram_user_id: int) -> str | None:
+        """Return the caller's participant code, if one exists."""
+
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT participant_code
+                    FROM participant_codes
+                    WHERE telegram_user_id = ?
+                    """,
+                    (telegram_user_id,),
+                ).fetchone()
+            if row is None:
+                return None
+            code = str(row["participant_code"])
+            if not _participant_code_is_valid(code):
+                raise VoiceCollectionStoreError
+            return code
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:
+            raise VoiceCollectionStoreError from exc
+
+    def completed_enrollment_profiles(self) -> tuple[EnrollmentProfile, ...]:
+        """Return completed participants with four enrollment WAVs."""
+
+        try:
+            profiles: list[EnrollmentProfile] = []
+            with self._connect() as connection:
+                participants = connection.execute(
+                    """
+                    SELECT p.telegram_user_id, c.participant_code
+                    FROM telegram_participants p
+                    JOIN participant_codes c
+                        ON c.telegram_user_id = p.telegram_user_id
+                    JOIN voice_samples v
+                        ON v.telegram_user_id = p.telegram_user_id
+                    WHERE p.accepted = 1
+                    GROUP BY p.telegram_user_id, c.participant_code, p.required_samples
+                    HAVING COUNT(v.sample_id) = p.required_samples
+                    ORDER BY c.participant_code
+                    """
+                ).fetchall()
+                for participant in participants:
+                    rows = connection.execute(
+                        """
+                        SELECT prompt_index, wav_path
+                        FROM voice_samples
+                        WHERE telegram_user_id = ? AND prompt_index BETWEEN 1 AND 4
+                        ORDER BY prompt_index
+                        """,
+                        (participant["telegram_user_id"],),
+                    ).fetchall()
+                    if len(rows) != 4:
+                        continue
+                    samples = tuple(
+                        EnrollmentSample(
+                            prompt_index=int(row["prompt_index"]),
+                            wav_path=Path(str(row["wav_path"])),
+                        )
+                        for row in rows
+                    )
+                    if tuple(sample.prompt_index for sample in samples) != (1, 2, 3, 4):
+                        continue
+                    code = str(participant["participant_code"])
+                    if not _participant_code_is_valid(code):
+                        raise VoiceCollectionStoreError
+                    profiles.append(
+                        EnrollmentProfile(participant_code=code, samples=samples)
+                    )
+            return tuple(profiles)
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:
+            raise VoiceCollectionStoreError from exc
+
     def has_processed_message(self, *, telegram_user_id: int, message_id: int) -> bool:
         """Return whether a Telegram voice message was already handled."""
 
@@ -228,6 +371,51 @@ class VoiceCollectionStore:
                     (telegram_user_id, message_id),
                 ).fetchone()
             return row is not None
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:
+            raise VoiceCollectionStoreError from exc
+
+    def has_processed_identification_message(
+        self, *, telegram_user_id: int, message_id: int
+    ) -> bool:
+        """Return whether an operator identification query was already handled."""
+
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT 1 FROM processed_identification_messages
+                    WHERE telegram_user_id = ? AND message_id = ?
+                    """,
+                    (telegram_user_id, message_id),
+                ).fetchone()
+            return row is not None
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:
+            raise VoiceCollectionStoreError from exc
+
+    def mark_processed_identification_message(
+        self,
+        *,
+        telegram_user_id: int,
+        message_id: int,
+        update_id: int | None,
+    ) -> None:
+        """Persist an operator identification query replay marker."""
+
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO processed_identification_messages (
+                        telegram_user_id, message_id, update_id
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (telegram_user_id, message_id, update_id),
+                )
         except (KeyboardInterrupt, SystemExit, MemoryError):
             raise
         except Exception as exc:
@@ -302,6 +490,7 @@ class VoiceCollectionStore:
         except sqlite3.IntegrityError:
             return self.get_session(telegram_user_id) or SessionSnapshot(
                 subject_id="",
+                participant_code=None,
                 accepted=False,
                 completed_samples=0,
                 required_samples=REQUIRED_RECORDINGS,
@@ -327,7 +516,18 @@ class VoiceCollectionStore:
                     (telegram_user_id,),
                 )
                 connection.execute(
+                    """
+                    DELETE FROM processed_identification_messages
+                    WHERE telegram_user_id = ?
+                    """,
+                    (telegram_user_id,),
+                )
+                connection.execute(
                     "DELETE FROM voice_samples WHERE telegram_user_id = ?",
+                    (telegram_user_id,),
+                )
+                connection.execute(
+                    "DELETE FROM participant_codes WHERE telegram_user_id = ?",
                     (telegram_user_id,),
                 )
                 connection.execute(
@@ -509,10 +709,104 @@ class VoiceCollectionStore:
         ).fetchone()
         return SessionSnapshot(
             subject_id=str(row["subject_id"]),
+            participant_code=self._participant_code_from_connection(
+                connection,
+                telegram_user_id=telegram_user_id,
+            ),
             accepted=bool(row["accepted"]),
             completed_samples=int(count_row[0]),
             required_samples=int(row["required_samples"]),
         )
+
+    def _migrate_participant_codes(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT p.telegram_user_id, p.subject_id
+            FROM telegram_participants p
+            LEFT JOIN participant_codes c
+                ON c.telegram_user_id = p.telegram_user_id
+            WHERE c.telegram_user_id IS NULL
+            ORDER BY p.rowid, p.subject_id
+            """
+        ).fetchall()
+        for row in rows:
+            self._assign_participant_code(
+                connection,
+                telegram_user_id=int(row["telegram_user_id"]),
+                subject_id=str(row["subject_id"]),
+            )
+
+    def _assign_participant_code(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        telegram_user_id: int,
+        subject_id: str,
+    ) -> str:
+        existing = connection.execute(
+            """
+            SELECT participant_code
+            FROM participant_codes
+            WHERE telegram_user_id = ?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if existing is not None:
+            code = str(existing["participant_code"])
+            if not _participant_code_is_valid(code):
+                raise VoiceCollectionStoreError
+            return code
+        used_rows = connection.execute(
+            """
+            SELECT participant_code
+            FROM participant_code_reservations
+            ORDER BY participant_code
+            """
+        ).fetchall()
+        used = {str(row["participant_code"]) for row in used_rows}
+        for number in range(1, _MAX_PARTICIPANT_CODE + 1):
+            code = f"P{number:04d}"
+            if code in used:
+                continue
+            connection.execute(
+                """
+                INSERT INTO participant_code_reservations (participant_code)
+                VALUES (?)
+                """,
+                (code,),
+            )
+            connection.execute(
+                """
+                INSERT INTO participant_codes (
+                    telegram_user_id, subject_id, participant_code
+                )
+                VALUES (?, ?, ?)
+                """,
+                (telegram_user_id, subject_id, code),
+            )
+            return code
+        raise VoiceCollectionStoreError
+
+    def _participant_code_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        telegram_user_id: int,
+    ) -> str | None:
+        row = connection.execute(
+            """
+            SELECT participant_code
+            FROM participant_codes
+            WHERE telegram_user_id = ?
+            """,
+            (telegram_user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        code = str(row["participant_code"])
+        if not _participant_code_is_valid(code):
+            raise VoiceCollectionStoreError
+        return code
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
@@ -619,3 +913,7 @@ def _unlink_temp_manifest(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _participant_code_is_valid(code: str) -> bool:
+    return type(code) is str and _PARTICIPANT_CODE_RE.fullmatch(code) is not None

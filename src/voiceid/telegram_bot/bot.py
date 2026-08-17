@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final, cast
 
 from voiceid.telegram_bot.audio import AudioConversionError, convert_ogg_to_wav
@@ -16,6 +18,7 @@ from voiceid.telegram_bot.config import (
     START_TEXT,
     UNSUPPORTED_MESSAGE_TEXT,
 )
+from voiceid.telegram_bot.identification import ExperimentalIdentifier
 from voiceid.telegram_bot.storage import (
     ReservedSample,
     SessionSnapshot,
@@ -47,10 +50,15 @@ class TelegramVoiceCollectionBot:
         client: TelegramClient,
         store: VoiceCollectionStore,
         config: BotRuntimeConfig | None = None,
+        operator_ids: frozenset[int] = frozenset(),
+        identifier: ExperimentalIdentifier | None = None,
     ) -> None:
         self._client = client
         self._store = store
         self._config = config or BotRuntimeConfig()
+        self._operator_ids = operator_ids
+        self._identifier = identifier
+        self._pending_identification: set[int] = set()
 
     def process_update(self, update: dict[str, Any]) -> None:
         """Process one Telegram update from polling."""
@@ -113,6 +121,15 @@ class TelegramVoiceCollectionBot:
             )
             return
 
+        if telegram_user_id in self._pending_identification:
+            self._handle_identification_message(
+                chat_id=chat_id,
+                telegram_user_id=telegram_user_id,
+                message=message,
+                update_id=update_id,
+            )
+            return
+
         session = self._store.get_session(telegram_user_id)
         if session is None or not session.accepted:
             self._safe_send(chat_id, CONSENT_REQUIRED_TEXT)
@@ -164,9 +181,36 @@ class TelegramVoiceCollectionBot:
                 self._safe_send(chat_id, "Ваши локальные записи и состояние удалены.")
             else:
                 self._safe_send(chat_id, GENERIC_ERROR_TEXT)
+        elif command == "/my_code":
+            code = self._store.get_participant_code(telegram_user_id)
+            if code is None:
+                self._safe_send(chat_id, "Код ещё не назначен.")
+            else:
+                self._safe_send(chat_id, f"Ваш код: {code}")
+        elif command == "/whoami":
+            self._safe_send(chat_id, f"Ваш Telegram user ID: {telegram_user_id}")
+        elif command == "/identify":
+            if not self._operator_is_authorized(
+                chat_id=chat_id,
+                telegram_user_id=telegram_user_id,
+            ):
+                self._safe_send(chat_id, "Not authorized.")
+                return
+            self._pending_identification.add(telegram_user_id)
+            self._safe_send(
+                chat_id,
+                "Send one voice message for experimental identification.",
+            )
+        elif command == "/cancel":
+            self._pending_identification.discard(telegram_user_id)
+            self._safe_send(chat_id, "Cancelled.")
         else:
             self._safe_send(
-                chat_id, "Доступные команды: /start, /status, /restart, /delete_me."
+                chat_id,
+                (
+                    "Доступные команды: /start, /status, /my_code, /whoami, "
+                    "/restart, /delete_me."
+                ),
             )
 
     def _handle_voice(
@@ -254,7 +298,12 @@ class TelegramVoiceCollectionBot:
 
     def _send_next_prompt(self, chat_id: int, session: SessionSnapshot) -> None:
         if session.is_complete:
-            self._safe_send(chat_id, "Сбор завершён. Спасибо за участие.")
+            suffix = (
+                f" Ваш код: {session.participant_code}."
+                if session.participant_code is not None
+                else ""
+            )
+            self._safe_send(chat_id, f"Сбор завершён. Спасибо за участие.{suffix}")
             return
         next_index = session.completed_samples + 1
         phrase = RESEARCH_PHRASES[session.completed_samples]
@@ -287,6 +336,94 @@ class TelegramVoiceCollectionBot:
             return False
         return True
 
+    def _operator_is_authorized(self, *, chat_id: int, telegram_user_id: int) -> bool:
+        return (
+            chat_id == telegram_user_id
+            and telegram_user_id in self._operator_ids
+            and len(self._operator_ids) > 0
+        )
+
+    def _handle_identification_message(
+        self,
+        *,
+        chat_id: int,
+        telegram_user_id: int,
+        message: dict[str, Any],
+        update_id: int | None,
+    ) -> None:
+        if not self._operator_is_authorized(
+            chat_id=chat_id,
+            telegram_user_id=telegram_user_id,
+        ):
+            self._pending_identification.discard(telegram_user_id)
+            self._safe_send(chat_id, "Not authorized.")
+            return
+        voice = message.get("voice")
+        if type(voice) is not dict:
+            self._safe_send(chat_id, "INVALID AUDIO")
+            return
+        message_id = _message_id(message)
+        if message_id is None:
+            self._safe_send(chat_id, "INVALID AUDIO")
+            return
+        if self._store.has_processed_identification_message(
+            telegram_user_id=telegram_user_id,
+            message_id=message_id,
+        ):
+            return
+        if not self._voice_metadata_is_supported(voice):
+            self._safe_send(chat_id, "INVALID AUDIO")
+            return
+        file_id = voice.get("file_id")
+        if type(file_id) is not str or not file_id:
+            self._safe_send(chat_id, "INVALID AUDIO")
+            return
+        tmp_root = self._store.data_dir / "tmp"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        query_dir = Path(
+            tempfile.mkdtemp(
+                prefix="identify-",
+                dir=tmp_root,
+            )
+        )
+        ogg_path = query_dir / "query.ogg"
+        wav_path = query_dir / "query.wav"
+        try:
+            self._client.download_file(
+                file_id=file_id,
+                target_path=ogg_path,
+                max_bytes=self._config.max_voice_file_size_bytes,
+            )
+            convert_ogg_to_wav(
+                source_ogg=ogg_path,
+                target_wav=wav_path,
+                ffmpeg_path=self._config.ffmpeg_path,
+                min_seconds=self._config.min_voice_seconds,
+                max_seconds=self._config.max_voice_seconds,
+            )
+            if self._identifier is None:
+                self._safe_send(chat_id, "IDENTIFICATION UNAVAILABLE")
+                return
+            result = self._identifier.identify(
+                query_wav_path=wav_path,
+                profiles=self._store.completed_enrollment_profiles(),
+            )
+            self._store.mark_processed_identification_message(
+                telegram_user_id=telegram_user_id,
+                message_id=message_id,
+                update_id=update_id,
+            )
+            self._safe_send(chat_id, result.text)
+            self._pending_identification.discard(telegram_user_id)
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except (AudioConversionError, TelegramApiError, VoiceCollectionStoreError):
+            self._safe_send(chat_id, "INVALID AUDIO")
+        except Exception:
+            self._safe_send(chat_id, "IDENTIFICATION UNAVAILABLE")
+        finally:
+            _cleanup_query_dir(query_dir)
+
 
 def _consent_keyboard() -> dict[str, object]:
     return {
@@ -300,7 +437,8 @@ def _consent_keyboard() -> dict[str, object]:
 
 
 def _progress_text(session: SessionSnapshot) -> str:
-    return f"Прогресс: {session.completed_samples}/{session.required_samples}."
+    code = f" Код: {session.participant_code}." if session.participant_code else ""
+    return f"Прогресс: {session.completed_samples}/{session.required_samples}.{code}"
 
 
 def _chat_id_from_update(update: dict[str, Any]) -> int | None:
@@ -352,3 +490,12 @@ def _cleanup_reserved_sample(reserved: ReservedSample) -> None:
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _cleanup_query_dir(path: Path) -> None:
+    try:
+        for child in path.iterdir():
+            child.unlink(missing_ok=True)
+        path.rmdir()
+    except OSError:
+        pass

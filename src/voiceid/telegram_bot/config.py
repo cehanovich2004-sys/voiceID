@@ -12,6 +12,9 @@ MAX_VOICE_FILE_SIZE_BYTES: Final = 20 * 1024 * 1024
 FFMPEG_TIMEOUT_SECONDS: Final = 30.0
 
 DEFAULT_DATA_DIR: Final = Path.home() / ".local" / "share" / "voiceid" / "telegram_bot"
+DEFAULT_MODEL_CACHE_DIR: Final = (
+    Path.home() / ".cache" / "voiceid" / "speechbrain_ecapa"
+)
 
 RESEARCH_PHRASES: Final = (
     "Сегодня хорошая погода, и я проверяю запись своего голоса.",
