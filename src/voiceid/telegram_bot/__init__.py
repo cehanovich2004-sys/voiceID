@@ -2,6 +2,7 @@
 
 from voiceid.telegram_bot.config import (
     DEFAULT_DATA_DIR,
+    DEFAULT_MODEL_CACHE_DIR,
     MAX_VOICE_FILE_SIZE_BYTES,
     MAX_VOICE_SECONDS,
     MIN_VOICE_SECONDS,
@@ -13,6 +14,7 @@ from voiceid.telegram_bot.storage import VoiceCollectionStore
 
 __all__ = [
     "DEFAULT_DATA_DIR",
+    "DEFAULT_MODEL_CACHE_DIR",
     "MAX_VOICE_FILE_SIZE_BYTES",
     "MAX_VOICE_SECONDS",
     "MIN_VOICE_SECONDS",

@@ -29,8 +29,9 @@ non-production status. The participant must choose `Согласен` before any
 is accepted. Without consent, voice messages are ignored and the participant is
 asked to run `/start`.
 
-After consent, the bot creates a random pseudonymous `subject_id` and requests
-six Telegram voice messages. Progress is shown as `1/6` through `6/6`.
+After consent, the bot creates a random pseudonymous `subject_id`, assigns a
+stable local participant code such as `P0001`, and requests six Telegram voice
+messages. Progress is shown as `1/6` through `6/6`.
 
 The phrases are:
 
@@ -67,7 +68,9 @@ written to the feasibility manifest. Manifest records contain pseudonymous
 for the internal feasibility adapter.
 
 The first collected session is assigned to `CALIBRATION`. The MVP does not
-automatically create a `HOLDOUT` partition.
+automatically create a `HOLDOUT` partition. Participant codes are stored only in
+local SQLite for participant/operator communication; they are not written to the
+feasibility manifest, CSV/HTML reports, or embedding metadata.
 
 `.env`, SQLite databases, OGG/Opus files, WAV files, M4A files, and local
 manifests are ignored by Git.
@@ -95,7 +98,11 @@ scan the filesystem or modify unknown files.
 Participant commands:
 
 - `/start`: show purpose and consent buttons.
-- `/status`: show progress only, without IDs or paths.
+- `/status`: show progress and only the caller's own `Pxxxx` code, without
+  internal IDs or paths.
+- `/my_code`: show only the caller's own participant code.
+- `/whoami`: show only the caller's numeric Telegram user ID so the local
+  operator can configure the allowlist.
 - `/restart`: delete an unfinished local session and start over.
 - `/delete_me`: delete local records, audio files, manifest rows, and the
   Telegram-ID association for that user.
@@ -111,9 +118,32 @@ parallel messages from filling the same prompt.
 
 Operator commands:
 
+Operator-only features are disabled unless `VOICEID_TELEGRAM_OPERATOR_IDS`
+contains a comma-separated allowlist of exact positive Telegram user IDs. The
+allowlist is read only from the local environment and is not logged or written to
+manifests/reports. Forwarded messages, usernames, and chat IDs do not authorize
+operator actions.
+
+- `/identify`: ask an authorized operator to send one voice message for
+  exploratory local identification against completed participant profiles.
+- `/cancel`: cancel a pending operator identification request.
+
+Experimental identification uses enrollment prompts `1-4` only. Prompts `5-6`
+are holdout samples and are never included in the in-memory profile. The query
+voice message is converted to a temporary WAV, embedded, compared to eligible
+profiles, and deleted after the result or error. Embeddings stay in memory only.
+The fixed exploratory policy is versioned as
+`telegram-identification-policy-v1`, with threshold `0.4` and minimum margin
+`0.05`. It returns only `IDENTIFIED: Pxxxx`, `UNKNOWN`, `AMBIGUOUS`,
+`INVALID AUDIO`, or `IDENTIFICATION UNAVAILABLE`; it does not expose raw scores,
+probability, confidence, `MATCH`, `NO_MATCH`, or a production identity decision.
+
 ```bash
 export TELEGRAM_BOT_TOKEN=""
-voiceid-telegram-bot run --data-dir ~/.local/share/voiceid/telegram_bot
+export VOICEID_TELEGRAM_OPERATOR_IDS=""
+voiceid-telegram-bot run \
+  --data-dir ~/.local/share/voiceid/telegram_bot \
+  --model-cache-dir ~/.cache/voiceid/speechbrain_ecapa
 ```
 
 Export a local manifest:
@@ -146,5 +176,7 @@ load the model, compute embeddings, select a threshold, or compare identities.
 - Temporary or partially converted files are removed on conversion failure.
 - Audio, manifests, reports, and embeddings must not be committed.
 - The bot uses Telegram polling for the MVP and does not configure webhooks.
+- Identification model loading uses the prepared pinned local SpeechBrain cache
+  in strict offline mode. Network calls during identification are disabled.
 - No analytics, telemetry, cloud storage, or third-party APIs are added beyond
   Telegram Bot API calls required for polling and file download.
